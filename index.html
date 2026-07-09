@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>旅のしおり</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header class="app-header">
+    <div class="header-title-row">
+      <h1 id="tripTitle" class="trip-title" contenteditable="true" spellcheck="false"></h1>
+      <div class="header-actions">
+        <label class="lang-switch" title="Language">
+          <span class="lang-icon" aria-hidden="true">🌐</span>
+          <select id="langSelect">
+            <option value="ja">日本語</option>
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+            <option value="th">ไทย</option>
+          </select>
+        </label>
+        <button type="button" id="tripsBtn" class="btn btn-outline btn-icon" data-i18n-aria="header.tripsAria" aria-label="しおり一覧を開く" title="しおり一覧">📚</button>
+        <button type="button" id="shareBtn" class="btn btn-outline" data-i18n="header.share">共有</button>
+        <button type="button" id="textioBtn" class="btn btn-outline" data-i18n="header.textio">CSV入出力</button>
+        <button type="button" id="settingsBtn" class="btn btn-outline btn-icon" data-i18n-aria="settings.buttonAria" aria-label="設定" title="設定">⚙️</button>
+      </div>
+    </div>
+
+    <div class="day-tabs-row">
+      <div id="dayTabs" class="day-tabs"></div>
+      <button type="button" id="addDayBtn" class="btn-add-day" data-i18n="day.addDay">＋ 日を追加</button>
+    </div>
+
+    <div class="day-meta">
+      <label class="day-meta-field">
+        <span data-i18n="day.date">日付</span>
+        <input type="date" id="dayDateInput">
+      </label>
+      <label class="day-meta-field">
+        <span data-i18n="day.startTime">開始時刻</span>
+        <input type="time" id="dayStartTimeInput">
+      </label>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <button type="button" id="routeBtn" class="route-btn">
+      <span id="routeBtnLabel" data-i18n="timeline.routeButton">🧭 移動手段の選択とルートを検討</span>
+    </button>
+
+    <div class="main-layout">
+      <div class="main-col-primary">
+        <div id="timeline" class="timeline"></div>
+        <p id="emptyDayMsg" class="empty-day-msg hidden" data-i18n="timeline.emptyDay">この日の予定はまだありません。下のフォームから追加しましょう。</p>
+
+        <section class="add-form" id="addForm">
+          <div class="add-form-cats" id="addFormCats">
+            <button type="button" class="cat-btn cat-move" data-cat="move">
+              <span class="cat-btn-icon" aria-hidden="true">🚌</span>
+              <span data-cat-label="move">移動</span>
+            </button>
+            <button type="button" class="cat-btn cat-meal" data-cat="meal">
+              <span class="cat-btn-icon" aria-hidden="true">🍽️</span>
+              <span data-cat-label="meal">食事</span>
+            </button>
+            <button type="button" class="cat-btn cat-stay" data-cat="stay">
+              <span class="cat-btn-icon" aria-hidden="true">🏨</span>
+              <span data-cat-label="stay">宿泊</span>
+            </button>
+            <button type="button" class="cat-btn cat-sight selected" data-cat="sight">
+              <span class="cat-btn-icon" aria-hidden="true">📸</span>
+              <span data-cat-label="sight">観光</span>
+            </button>
+          </div>
+          <div class="add-form-fields">
+            <input type="text" id="addName" class="add-name" data-i18n-placeholder="add.namePlaceholder" placeholder="行き先・お店の名前など">
+            <div class="add-form-row2">
+              <input type="number" id="addDur" class="add-dur" min="0" step="5" value="60">
+              <span class="add-dur-unit" id="addDurUnit">分</span>
+              <input type="text" id="addNote" class="add-note" data-i18n-placeholder="add.notePlaceholder" placeholder="メモ（任意）">
+              <button type="button" id="addBtn" class="btn btn-primary" data-i18n="add.button">＋ 追加</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="map-section" id="mapSection">
+        <button type="button" id="mapToggleBtn" class="map-toggle-btn" aria-expanded="false" aria-controls="mapPanel">
+          <span data-i18n="map.toggle">🗺 地図</span>
+        </button>
+        <div id="mapPanel" class="map-panel collapsed">
+          <div class="map-container-wrap">
+            <div id="mapContainer" class="map-container"></div>
+            <div id="mapNoCoordsMsg" class="map-no-coords hidden" data-i18n="map.noCoords">座標のある場所がありません</div>
+          </div>
+          <button type="button" id="mapUpdateBtn" class="btn btn-outline map-update-btn">
+            <span id="mapUpdateBtnLabel" data-i18n="map.updateButton">📍 地図を更新</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 共有モーダル -->
+<div id="shareModal" class="modal-overlay hidden">
+  <div class="modal">
+    <button type="button" class="modal-close" data-close="shareModal" data-i18n-aria="modal.close" aria-label="閉じる">×</button>
+    <h2 data-i18n="share.title">しおりを共有</h2>
+    <p data-i18n="share.desc">下のリンクをコピーして、家族や友達に送りましょう。</p>
+    <textarea id="shareUrl" class="share-url" readonly rows="4"></textarea>
+    <div class="modal-actions">
+      <button type="button" id="shareCopyBtn" class="btn btn-primary" data-i18n="share.copy">リンクをコピー</button>
+    </div>
+  </div>
+</div>
+
+<!-- CSV入出力モーダル -->
+<div id="textioModal" class="modal-overlay hidden">
+  <div class="modal">
+    <button type="button" class="modal-close" data-close="textioModal" data-i18n-aria="modal.close" aria-label="閉じる">×</button>
+    <h2 data-i18n="textio.title">CSVで入出力</h2>
+    <p data-i18n="textio.desc">現在のしおりをCSVで表示しています。編集して「読み込む」を押すと反映されます。</p>
+    <textarea id="textioArea" class="textio-area" rows="12"></textarea>
+    <input type="file" id="textioFileInput" accept=".csv,text/csv" class="hidden">
+    <div class="modal-actions">
+      <button type="button" id="textioCopyBtn" class="btn btn-outline" data-i18n="textio.copy">コピー</button>
+      <button type="button" id="textioLoadBtn" class="btn btn-primary" data-i18n="textio.load">読み込む</button>
+      <button type="button" id="textioDownloadBtn" class="btn btn-outline" data-i18n="textio.download">CSVダウンロード</button>
+      <button type="button" id="textioOpenFileBtn" class="btn btn-outline" data-i18n="textio.openFile">ファイルを開く</button>
+    </div>
+  </div>
+</div>
+
+<!-- 設定モーダル -->
+<div id="settingsModal" class="modal-overlay hidden">
+  <div class="modal">
+    <button type="button" class="modal-close" data-close="settingsModal" data-i18n-aria="modal.close" aria-label="閉じる">×</button>
+    <h2 data-i18n="settings.title">設定</h2>
+    <p data-i18n="settings.desc">Google Maps Platform の APIキーを設定すると、区間の移動時間をGoogleの実測ルート計算に切り替えられます。</p>
+    <label class="settings-field-label" for="settingsApiKeyInput" data-i18n="settings.apiKeyLabel">Google Maps APIキー</label>
+    <input type="password" id="settingsApiKeyInput" class="settings-api-key-input" autocomplete="off" spellcheck="false" data-i18n-placeholder="settings.apiKeyPlaceholder" placeholder="APIキーを入力">
+    <ul class="settings-notes">
+      <li data-i18n="settings.note1">利用には Google Cloud Console で Routes API を有効化する必要があります。</li>
+      <li data-i18n="settings.note2">APIの利用は従量課金です。料金体系はGoogleの公式ドキュメントをご確認ください。</li>
+      <li data-i18n="settings.note3">セキュリティのため、APIキーにはHTTPリファラー制限の設定を推奨します。</li>
+      <li data-i18n="settings.note4">キーはこの端末のブラウザ内にのみ保存されます。共有リンクやテキスト出力には含まれません。</li>
+      <li data-i18n="settings.note5">Places API (New) を有効化すると、海外スポットなどの名前解決が強化されます（任意）。</li>
+      <li data-i18n="settings.note6">Cloud Translation API を有効化すると、タイトルとスポット名の自動翻訳に使用されます（任意）。</li>
+    </ul>
+    <div class="modal-actions">
+      <button type="button" id="settingsDeleteBtn" class="btn btn-outline" data-i18n="settings.delete">削除</button>
+      <button type="button" id="settingsSaveBtn" class="btn btn-primary" data-i18n="settings.save">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- しおり一覧モーダル -->
+<div id="tripsModal" class="modal-overlay hidden">
+  <div class="modal">
+    <button type="button" class="modal-close" data-close="tripsModal" data-i18n-aria="modal.close" aria-label="閉じる">×</button>
+    <h2 data-i18n="trips.title">しおり一覧</h2>
+    <div id="tripsList" class="trips-list"></div>
+    <div class="modal-actions">
+      <button type="button" id="tripsNewBtn" class="btn btn-primary" data-i18n="trips.newTrip">＋ 新しいしおり</button>
+    </div>
+  </div>
+</div>
+
+<!-- 汎用確認モーダル -->
+<div id="confirmModal" class="modal-overlay hidden">
+  <div class="modal modal-confirm">
+    <p id="confirmTitle" class="confirm-title"></p>
+    <p id="confirmBody" class="confirm-body"></p>
+    <div class="modal-actions">
+      <button type="button" id="confirmCancelBtn" class="btn btn-outline" data-i18n="confirm.cancel">キャンセル</button>
+      <button type="button" id="confirmOkBtn" class="btn btn-primary" data-i18n="confirm.ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+<script src="i18n.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
