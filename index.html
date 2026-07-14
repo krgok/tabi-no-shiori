@@ -61,6 +61,11 @@
         <span data-i18n="day.tzLabel">🕐 タイムゾーン</span>
         <select id="dayTzSelect"></select>
       </label>
+      <!-- 非公開マーク（14拡張）: 日単位の🔓/🔒トグルとバッジ -->
+      <div class="day-meta-priv">
+        <button type="button" id="dayPrivToggle" class="day-priv-toggle" aria-pressed="false">🔓</button>
+        <span id="dayPrivBadge" class="day-priv-badge hidden" data-i18n="day.privBadge">🔒 この日は非公開</span>
+      </div>
     </div>
   </header>
 
@@ -108,8 +113,13 @@
           <section class="checklist-section" id="packingSection">
             <div class="checklist-header">
               <h2 data-i18n="checklist.packingTitle">🧳 持ち物リスト</h2>
-              <span class="checklist-progress" id="packingProgress">0/0</span>
+              <div class="checklist-header-right">
+                <span class="checklist-progress" id="packingProgress">0/0</span>
+                <!-- 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグル -->
+                <button type="button" id="packingListPrivToggle" class="checklist-list-priv-toggle" aria-pressed="false">🔓</button>
+              </div>
             </div>
+            <p class="checklist-list-priv-badge hidden" id="packingListPrivBadge" data-i18n="checklist.listPrivBadge">🔒 非公開</p>
             <div class="checklist-items" id="packingItems"></div>
             <p class="checklist-empty hidden" id="packingEmptyMsg" data-i18n="checklist.packingEmpty">持ち物を追加しましょう</p>
             <div class="checklist-add-row">
@@ -121,8 +131,13 @@
           <section class="checklist-section" id="todosSection">
             <div class="checklist-header">
               <h2 data-i18n="checklist.todosTitle">✅ やることリスト</h2>
-              <span class="checklist-progress" id="todosProgress">0/0</span>
+              <div class="checklist-header-right">
+                <span class="checklist-progress" id="todosProgress">0/0</span>
+                <!-- 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグル -->
+                <button type="button" id="todosListPrivToggle" class="checklist-list-priv-toggle" aria-pressed="false">🔓</button>
+              </div>
             </div>
+            <p class="checklist-list-priv-badge hidden" id="todosListPrivBadge" data-i18n="checklist.listPrivBadge">🔒 非公開</p>
             <div class="checklist-items" id="todosItems"></div>
             <p class="checklist-empty hidden" id="todosEmptyMsg" data-i18n="checklist.todosEmpty">やることを追加しましょう</p>
             <div class="checklist-add-row">
@@ -272,8 +287,13 @@
       <section class="checklist-section" id="prepPackingSection">
         <div class="checklist-header">
           <h2 data-i18n="checklist.packingTitle">🧳 持ち物リスト</h2>
-          <span class="checklist-progress" id="prepPackingProgress">0/0</span>
+          <div class="checklist-header-right">
+            <span class="checklist-progress" id="prepPackingProgress">0/0</span>
+            <!-- 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグル（準備モーダル側） -->
+            <button type="button" id="prepPackingListPrivToggle" class="checklist-list-priv-toggle" aria-pressed="false">🔓</button>
+          </div>
         </div>
+        <p class="checklist-list-priv-badge hidden" id="prepPackingListPrivBadge" data-i18n="checklist.listPrivBadge">🔒 非公開</p>
         <div class="checklist-items" id="prepPackingItems"></div>
         <p class="checklist-empty hidden" id="prepPackingEmptyMsg" data-i18n="checklist.packingEmpty">持ち物を追加しましょう</p>
         <div class="checklist-add-row">
@@ -285,8 +305,13 @@
       <section class="checklist-section" id="prepTodosSection">
         <div class="checklist-header">
           <h2 data-i18n="checklist.todosTitle">✅ やることリスト</h2>
-          <span class="checklist-progress" id="prepTodosProgress">0/0</span>
+          <div class="checklist-header-right">
+            <span class="checklist-progress" id="prepTodosProgress">0/0</span>
+            <!-- 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグル（準備モーダル側） -->
+            <button type="button" id="prepTodosListPrivToggle" class="checklist-list-priv-toggle" aria-pressed="false">🔓</button>
+          </div>
         </div>
+        <p class="checklist-list-priv-badge hidden" id="prepTodosListPrivBadge" data-i18n="checklist.listPrivBadge">🔒 非公開</p>
         <div class="checklist-items" id="prepTodosItems"></div>
         <p class="checklist-empty hidden" id="prepTodosEmptyMsg" data-i18n="checklist.todosEmpty">やることを追加しましょう</p>
         <div class="checklist-add-row">

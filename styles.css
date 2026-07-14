@@ -392,6 +392,54 @@ select {
   box-shadow: inset 0 0 0 1.5px var(--pink-dark);
 }
 
+/* 非公開マーク（14拡張）: 日単位の🔓/🔒トグルとバッジ */
+.day-meta-priv {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.day-priv-toggle {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  opacity: 0.6;
+}
+
+.day-priv-toggle:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--ink);
+}
+
+.day-priv-toggle.active {
+  opacity: 1;
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.day-priv-badge {
+  flex: none;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: rgba(90, 74, 66, 0.1);
+}
+
+/* 非公開マーク（14拡張）: 日単位で非公開の日を示す日タブ内の小さな🔒アイコン */
+.day-tab-lock {
+  flex: none;
+  font-size: 0.7rem;
+  opacity: 0.75;
+}
+
 /* ===================== メイン ===================== */
 
 .app-main {
@@ -1125,6 +1173,11 @@ select {
   min-width: 0;
 }
 
+/* 非公開マーク（14拡張）: リスト全体が非公開のとき、セクション全体を淡い配色にする */
+.checklist-section.checklist-section-private {
+  background: #f3efe9;
+}
+
 .checklist-header {
   display: flex;
   align-items: center;
@@ -1140,6 +1193,14 @@ select {
   color: var(--ink);
 }
 
+/* 非公開マーク（14拡張）: 進捗カウントとリスト全体の🔓/🔒トグルをまとめる右側コンテナ */
+.checklist-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
 .checklist-progress {
   flex: none;
   font-size: 0.76rem;
@@ -1149,6 +1210,42 @@ select {
   padding: 3px 10px;
   border-radius: 999px;
   white-space: nowrap;
+}
+
+/* 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグル */
+.checklist-list-priv-toggle {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  opacity: 0.6;
+}
+
+.checklist-list-priv-toggle:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--ink);
+}
+
+.checklist-list-priv-toggle.active {
+  opacity: 1;
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.checklist-list-priv-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  background: rgba(90, 74, 66, 0.1);
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  margin: -4px 0 10px;
 }
 
 .checklist-items {
@@ -2024,14 +2121,17 @@ body.view-only-mode #authBtn,
 /* 日タブの削除ボタン・日追加ボタン */
 body.view-only-mode .day-tab-close,
 body.view-only-mode #addDayBtn,
+/* 日単位の🔒トグル（14拡張） */
+body.view-only-mode .day-priv-toggle,
 /* カードの操作ボタン（ドラッグ・複製・削除・🔒トグル） */
 body.view-only-mode .drag-handle,
 body.view-only-mode .item-duplicate,
 body.view-only-mode .item-delete,
 body.view-only-mode .item-priv-toggle,
 body.view-only-mode .item-note-priv-toggle,
-/* チェックリスト行の操作ボタン（🔒トグル・削除） */
+/* チェックリスト行の操作ボタン（🔒トグル・削除）・リスト全体単位の🔒トグル（14拡張） */
 body.view-only-mode .checklist-priv-toggle,
+body.view-only-mode .checklist-list-priv-toggle,
 body.view-only-mode .checklist-delete {
   display: none !important;
 }

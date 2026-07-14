@@ -588,7 +588,10 @@
       days: [],
       // 持ち物リスト・やることリスト（10）: しおり単位（日ごとではない）。共有リンク・localStorageに含まれる
       packing: normalizeChecklist(raw.packing),
-      todos: normalizeChecklist(raw.todos)
+      todos: normalizeChecklist(raw.todos),
+      // 非公開マーク（14拡張）: リスト全体まるごと非公開。既定 false。boolean 以外は防御的にフォールバック
+      packingPriv: !!raw.packingPriv,
+      todosPriv: !!raw.todosPriv
     };
     var days = Array.isArray(raw.days) ? raw.days : [];
     if (days.length === 0) {
@@ -600,6 +603,8 @@
         startTime: typeof d.startTime === "string" && d.startTime ? d.startTime : "09:00",
         // 時差対応（13）: IANAタイムゾーン文字列。既定 ""＝時差計算なし。文字列のみ許容する防御的正規化
         tz: typeof d.tz === "string" ? d.tz : "",
+        // 非公開マーク（14拡張）: その日を丸ごと非公開。既定 false。boolean 以外は防御的にフォールバック
+        priv: !!d.priv,
         items: []
       };
       var items = Array.isArray(d.items) ? d.items : [];
@@ -673,16 +678,32 @@
   }
 
   // 公開用サニタイズ（14の中核）。引数を一切変更しない純粋関数。
+  // - day.priv: true の日は days 配列から丸ごと削除する（14拡張・日単位）
+  // - trip.packingPriv / trip.todosPriv: true のリストは丸ごと空配列にする（14拡張・リスト単位）
   // - priv: true の行程項目・持ち物/やること要素を削除する
   // - notePriv: true の項目は note を空文字にする（項目自体は残す）
   // - 非公開項目の削除で隣接スポットを失う自動生成 move（auto: true）も一緒に削除する
-  //   （手動追加の move (auto: false) は隣接スポットが消えても残す）
-  // - 結果から priv / notePriv フラグ自体を取り除く（公開データに痕跡を残さない）
+  //   （手動追加の move (auto: false) は隣接スポットが消えても残す。日ごと削除の場合は
+  //   日全体が消えるため、その日に属す move も自動的に一緒に消える）
+  // - 結果から priv / notePriv / packingPriv / todosPriv フラグ自体を取り除く（公開データに痕跡を残さない）
+  // - 境界条件: 全ての日が非公開だと days が空配列になり得るが、これは意図した結果として返す。
+  //   受け取り側は必ず normalizeTrip を通す設計になっており、normalizeTrip は空 days を
+  //   1つの空の日にフォールバックするため、閲覧側・共有リンク経由の読み込みはクラッシュしない
+  //   （openPublicPreviewModal など sanitize結果を直接 forEach するだけの画面も、空配列なら
+  //   何も描画しないだけでエラーにはならない）
   function sanitizeTripForPublic(tripData) {
     var clone = JSON.parse(JSON.stringify(tripData || {}));
 
+    // 0. day.priv:true の日を丸ごと削除する（14拡張・日単位）。以降の処理は残った日にのみ及ぶ
+    if (Array.isArray(clone.days)) {
+      clone.days = clone.days.filter(function (day) {
+        return !(day && day.priv);
+      });
+    }
+
     if (Array.isArray(clone.days)) {
       clone.days.forEach(function (day) {
+        delete day.priv;
         var items = Array.isArray(day.items) ? day.items : [];
 
         // 1. priv:true の項目（moveも含む）を「削除対象」として記録する
@@ -722,23 +743,35 @@
       });
     }
 
+    // 1. リスト全体が非公開（packingPriv/todosPriv）なら中身を丸ごと空配列にする（14拡張・リスト単位）。
+    //    そうでなければ従来どおり要素単位の priv で個別に間引く
     ["packing", "todos"].forEach(function (key) {
       if (!Array.isArray(clone[key])) return;
-      clone[key] = clone[key]
-        .filter(function (it) {
-          return !(it && it.priv);
-        })
-        .map(function (it) {
-          delete it.priv;
-          return it;
-        });
+      var listPrivKey = key + "Priv"; // "packingPriv" | "todosPriv"
+      if (clone[listPrivKey]) {
+        clone[key] = [];
+      } else {
+        clone[key] = clone[key]
+          .filter(function (it) {
+            return !(it && it.priv);
+          })
+          .map(function (it) {
+            delete it.priv;
+            return it;
+          });
+      }
     });
+    delete clone.packingPriv;
+    delete clone.todosPriv;
 
     return clone;
   }
 
   // sanitizeTripForPublic の適用前後で除外された件数（行程項目＋持ち物＋やること合計）を数える。
-  // 公開プレビュー（14）の「非公開のため n 件を除外しました」表示に使う
+  // 公開プレビュー（14）の「非公開のため n 件を除外しました」表示に使う。
+  // 総数の差分で数えるだけの単純な実装のため、14拡張（日単位・リスト単位の非公開）で
+  // 丸ごと消えた日に含まれていた項目数・リスト全体非公開で消えた件数も自動的に含まれる
+  // （消えた日の items、空になった packing/todos の要素数がそのまま original 側の総数との差分になるため）
   function countSanitizedExclusions(original, sanitized) {
     function countItems(data) {
       var n = 0;
@@ -1163,9 +1196,11 @@
       title: "東京旅行",
       titles: Object.assign({}, window.I18N.SAMPLE_TRIP_TITLES),
       lang: "ja",
-      days: [{ date: "2026-07-20", startTime: "09:00", tz: "", items: items }],
+      days: [{ date: "2026-07-20", startTime: "09:00", tz: "", priv: false, items: items }],
       packing: [],
-      todos: []
+      todos: [],
+      packingPriv: false,
+      todosPriv: false
     };
   }
 
@@ -1176,9 +1211,11 @@
       title: window.I18N.NEW_TRIP_TITLES.ja,
       titles: Object.assign({}, window.I18N.NEW_TRIP_TITLES),
       lang: lang(),
-      days: [{ date: "", startTime: "09:00", tz: "", items: [] }],
+      days: [{ date: "", startTime: "09:00", tz: "", priv: false, items: [] }],
       packing: [],
-      todos: []
+      todos: [],
+      packingPriv: false,
+      todosPriv: false
     };
   }
 
@@ -1196,6 +1233,9 @@
     el.dayDateInput = document.getElementById("dayDateInput");
     el.dayStartTimeInput = document.getElementById("dayStartTimeInput");
     el.dayTzSelect = document.getElementById("dayTzSelect");
+    // 非公開マーク（14拡張）: 日単位の🔓/🔒トグルとバッジ
+    el.dayPrivToggle = document.getElementById("dayPrivToggle");
+    el.dayPrivBadge = document.getElementById("dayPrivBadge");
     el.printBtn = document.getElementById("printBtn");
     el.routeBtn = document.getElementById("routeBtn");
     el.routeBtnLabel = document.getElementById("routeBtnLabel");
@@ -1209,31 +1249,45 @@
     el.addBtn = document.getElementById("addBtn");
 
     // 持ち物リスト・やることリスト（10）: タイムライン下（メイン）
+    el.packingSection = document.getElementById("packingSection");
     el.packingItems = document.getElementById("packingItems");
     el.packingEmptyMsg = document.getElementById("packingEmptyMsg");
     el.packingProgress = document.getElementById("packingProgress");
     el.packingAddInput = document.getElementById("packingAddInput");
     el.packingAddBtn = document.getElementById("packingAddBtn");
+    el.todosSection = document.getElementById("todosSection");
     el.todosItems = document.getElementById("todosItems");
     el.todosEmptyMsg = document.getElementById("todosEmptyMsg");
     el.todosProgress = document.getElementById("todosProgress");
     el.todosAddInput = document.getElementById("todosAddInput");
     el.todosAddBtn = document.getElementById("todosAddBtn");
+    // 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグルとバッジ（メイン）
+    el.packingListPrivToggle = document.getElementById("packingListPrivToggle");
+    el.packingListPrivBadge = document.getElementById("packingListPrivBadge");
+    el.todosListPrivToggle = document.getElementById("todosListPrivToggle");
+    el.todosListPrivBadge = document.getElementById("todosListPrivBadge");
 
     // 準備リストへのクイックアクセス（11）: ヘッダーの🧳ボタン・準備モーダル内の同UI
     el.prepBtn = document.getElementById("prepBtn");
     el.prepBadge = document.getElementById("prepBadge");
     el.prepModal = document.getElementById("prepModal");
+    el.prepPackingSection = document.getElementById("prepPackingSection");
     el.prepPackingItems = document.getElementById("prepPackingItems");
     el.prepPackingEmptyMsg = document.getElementById("prepPackingEmptyMsg");
     el.prepPackingProgress = document.getElementById("prepPackingProgress");
     el.prepPackingAddInput = document.getElementById("prepPackingAddInput");
     el.prepPackingAddBtn = document.getElementById("prepPackingAddBtn");
+    el.prepTodosSection = document.getElementById("prepTodosSection");
     el.prepTodosItems = document.getElementById("prepTodosItems");
     el.prepTodosEmptyMsg = document.getElementById("prepTodosEmptyMsg");
     el.prepTodosProgress = document.getElementById("prepTodosProgress");
     el.prepTodosAddInput = document.getElementById("prepTodosAddInput");
     el.prepTodosAddBtn = document.getElementById("prepTodosAddBtn");
+    // 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグルとバッジ（準備モーダル）
+    el.prepPackingListPrivToggle = document.getElementById("prepPackingListPrivToggle");
+    el.prepPackingListPrivBadge = document.getElementById("prepPackingListPrivBadge");
+    el.prepTodosListPrivToggle = document.getElementById("prepTodosListPrivToggle");
+    el.prepTodosListPrivBadge = document.getElementById("prepTodosListPrivBadge");
 
     el.shareModal = document.getElementById("shareModal");
     el.shareUrl = document.getElementById("shareUrl");
@@ -1388,6 +1442,15 @@
       label.textContent = t("day.dayLabel", { n: idx + 1 });
       tab.appendChild(label);
 
+      // 非公開マーク（14拡張）: 日単位で非公開の日は、日タブにも小さく🔒を表示して一覧性を確保する
+      if (day.priv) {
+        var lockIcon = document.createElement("span");
+        lockIcon.className = "day-tab-lock";
+        lockIcon.textContent = "🔒";
+        lockIcon.setAttribute("aria-hidden", "true");
+        tab.appendChild(lockIcon);
+      }
+
       var closeBtn = document.createElement("button");
       closeBtn.type = "button";
       closeBtn.className = "day-tab-close";
@@ -1406,6 +1469,18 @@
     el.dayStartTimeInput.value = day.startTime || "09:00";
     populateTzSelect(el.dayTzSelect, t("day.tzNone"));
     el.dayTzSelect.value = day.tz || "";
+
+    // 非公開マーク（14拡張）: 日単位の🔓/🔒トグルとバッジ
+    if (el.dayPrivToggle) {
+      el.dayPrivToggle.className = "day-priv-toggle" + (day.priv ? " active" : "");
+      el.dayPrivToggle.textContent = day.priv ? "🔒" : "🔓";
+      el.dayPrivToggle.title = t(day.priv ? "day.privMarkOff" : "day.privMarkOn");
+      el.dayPrivToggle.setAttribute("aria-label", t("day.privToggleAria"));
+      el.dayPrivToggle.setAttribute("aria-pressed", day.priv ? "true" : "false");
+    }
+    if (el.dayPrivBadge) {
+      el.dayPrivBadge.classList.toggle("hidden", !day.priv);
+    }
   }
 
   /* =========================================================
@@ -2026,16 +2101,53 @@
     return kind === "packing" ? trip.packing : trip.todos;
   }
 
+  // 非公開マーク（14拡張）: リスト全体単位のフラグ名（"packingPriv" | "todosPriv"）
+  function checklistPrivKey(kind) {
+    return kind === "packing" ? "packingPriv" : "todosPriv";
+  }
+
   function checklistEls(kind, target) {
     var isPrep = target === "prep";
     if (kind === "packing") {
       return isPrep
-        ? { items: el.prepPackingItems, empty: el.prepPackingEmptyMsg, progress: el.prepPackingProgress, addInput: el.prepPackingAddInput }
-        : { items: el.packingItems, empty: el.packingEmptyMsg, progress: el.packingProgress, addInput: el.packingAddInput };
+        ? {
+            items: el.prepPackingItems,
+            empty: el.prepPackingEmptyMsg,
+            progress: el.prepPackingProgress,
+            addInput: el.prepPackingAddInput,
+            section: el.prepPackingSection,
+            listPrivToggle: el.prepPackingListPrivToggle,
+            listPrivBadge: el.prepPackingListPrivBadge
+          }
+        : {
+            items: el.packingItems,
+            empty: el.packingEmptyMsg,
+            progress: el.packingProgress,
+            addInput: el.packingAddInput,
+            section: el.packingSection,
+            listPrivToggle: el.packingListPrivToggle,
+            listPrivBadge: el.packingListPrivBadge
+          };
     }
     return isPrep
-      ? { items: el.prepTodosItems, empty: el.prepTodosEmptyMsg, progress: el.prepTodosProgress, addInput: el.prepTodosAddInput }
-      : { items: el.todosItems, empty: el.todosEmptyMsg, progress: el.todosProgress, addInput: el.todosAddInput };
+      ? {
+          items: el.prepTodosItems,
+          empty: el.prepTodosEmptyMsg,
+          progress: el.prepTodosProgress,
+          addInput: el.prepTodosAddInput,
+          section: el.prepTodosSection,
+          listPrivToggle: el.prepTodosListPrivToggle,
+          listPrivBadge: el.prepTodosListPrivBadge
+        }
+      : {
+          items: el.todosItems,
+          empty: el.todosEmptyMsg,
+          progress: el.todosProgress,
+          addInput: el.todosAddInput,
+          section: el.todosSection,
+          listPrivToggle: el.todosListPrivToggle,
+          listPrivBadge: el.todosListPrivBadge
+        };
   }
 
   function buildChecklistRow(kind, it) {
@@ -2122,6 +2234,8 @@
     var doneCount = list.filter(function (it) {
       return it.done;
     }).length;
+    // 非公開マーク（14拡張）: リスト全体単位の非公開フラグ
+    var isListPriv = !!trip[checklistPrivKey(kind)];
 
     ["main", "prep"].forEach(function (target) {
       var els = checklistEls(kind, target);
@@ -2136,9 +2250,32 @@
       list.forEach(function (it) {
         els.items.appendChild(buildChecklistRow(kind, it));
       });
+
+      // 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグル・バッジ・淡いスタイル
+      if (els.section) {
+        els.section.classList.toggle("checklist-section-private", isListPriv);
+      }
+      if (els.listPrivToggle) {
+        els.listPrivToggle.className = "checklist-list-priv-toggle" + (isListPriv ? " active" : "");
+        els.listPrivToggle.textContent = isListPriv ? "🔒" : "🔓";
+        els.listPrivToggle.title = t(isListPriv ? "checklist.listPrivMarkOff" : "checklist.listPrivMarkOn");
+        els.listPrivToggle.setAttribute("aria-label", t("checklist.listPrivToggleAria"));
+        els.listPrivToggle.setAttribute("aria-pressed", isListPriv ? "true" : "false");
+      }
+      if (els.listPrivBadge) {
+        els.listPrivBadge.classList.toggle("hidden", !isListPriv);
+      }
     });
 
     updatePrepBadge();
+  }
+
+  // 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグルのクリックハンドラ（bindEvents から呼ぶ）
+  function toggleListPriv(kind) {
+    var key = checklistPrivKey(kind);
+    trip[key] = !trip[key];
+    saveState();
+    renderChecklistSection(kind);
   }
 
   function renderChecklists() {
@@ -4141,11 +4278,15 @@
   // 旧CSV（これらの列が無い）を読み込んでもエラーにならず空/false扱いにする後方互換のため、
   // CSV_COLUMNS（必須列）には含めず、別枠の任意列として扱う。
   // CSVエクスポートは自分用の完全バックアップのため、非公開項目も含めた完全データを出力する（サニタイズ対象外）
-  var CSV_OPTIONAL_COLUMNS = ["tz", "arriveTz", "private", "notePrivate"];
+  // 非公開マーク（14拡張）: dayPrivate（day列と同様に行ごと。同一dayの最初の行の値を採用）も任意列として追加する
+  var CSV_OPTIONAL_COLUMNS = ["tz", "arriveTz", "private", "notePrivate", "dayPrivate"];
   // 持ち物リスト・やることリスト（10）: 行程CSVの後に空行を1行挟んだ第2テーブルのヘッダー（必須列）
   var CHECKLIST_CSV_COLUMNS = ["list", "text", "done"];
-  // 非公開マークと公開用データ（14）: 第2テーブルの任意列（旧CSVには無いため false 扱いで後方互換）
-  var CHECKLIST_CSV_OPTIONAL_COLUMNS = ["private"];
+  // 非公開マークと公開用データ（14）: 第2テーブルの任意列（旧CSVには無いため false 扱いで後方互換）。
+  // listPrivate（14拡張）: リスト全体単位の非公開フラグ。行ごとに出力し、同一list（持ち物/やること）の
+  // 最初の行の値を採用する。既知の制限: リストが空 かつ listPrivate=true の場合は行が存在しないため
+  // CSV往復でフラグが失われる（空の非公開リストは実害が無いため許容。SPEC 14参照）
+  var CHECKLIST_CSV_OPTIONAL_COLUMNS = ["private", "listPrivate"];
 
   // RFC4180: フィールドに , " 改行のいずれかを含む場合のみ "..." で囲み、内部の " は "" にエスケープする
   function csvEscapeField(value) {
@@ -4251,21 +4392,24 @@
           day.tz || "",
           item.cat === "move" ? item.arriveTz || "" : "",
           item.priv ? "1" : "0",
-          item.notePriv ? "1" : "0"
+          item.notePriv ? "1" : "0",
+          // 非公開マーク（14拡張）: dayPrivate は日単位のフラグを行ごとに繰り返し出力する（tz と同様）
+          day.priv ? "1" : "0"
         ]);
       });
     });
     var mainCsv = rows.map(csvFormatRow).join("\r\n") + "\r\n";
 
     // 持ち物リスト・やることリスト（10）: 行程CSVの後に空行を1行挟み、第2テーブルとして出力する。
-    // 非公開マークと公開用データ（14）: private（1/0）列を追加する
+    // 非公開マークと公開用データ（14）: private（1/0）列を追加する。
+    // listPrivate（14拡張）: リスト全体単位のフラグを行ごとに繰り返し出力する
     var listRows = [CHECKLIST_CSV_COLUMNS.concat(CHECKLIST_CSV_OPTIONAL_COLUMNS)];
     var listLabels = window.I18N.LIST_NAMES[L];
     trip.packing.forEach(function (it) {
-      listRows.push([listLabels.packing, it.text || "", it.done ? "1" : "0", it.priv ? "1" : "0"]);
+      listRows.push([listLabels.packing, it.text || "", it.done ? "1" : "0", it.priv ? "1" : "0", trip.packingPriv ? "1" : "0"]);
     });
     trip.todos.forEach(function (it) {
-      listRows.push([listLabels.todos, it.text || "", it.done ? "1" : "0", it.priv ? "1" : "0"]);
+      listRows.push([listLabels.todos, it.text || "", it.done ? "1" : "0", it.priv ? "1" : "0", trip.todosPriv ? "1" : "0"]);
     });
     var listCsv = listRows.map(csvFormatRow).join("\r\n") + "\r\n";
 
@@ -4375,7 +4519,11 @@
     var done = doneVal === "1" || doneVal === "true";
     // 非公開マークと公開用データ（14）: private は任意列。旧CSVでは false 扱い
     var priv = csvBoolField(fields, colIndex, "private");
-    return { kind: kind, item: { id: genId(), text: text, done: done, priv: priv } };
+    // 非公開マーク（14拡張）: listPrivate も任意列。旧CSVでは false 扱い。
+    // リスト全体単位のフラグのため item には含めず、呼び出し元（parseTripCsv）で
+    // 同一 list の最初の行の値だけを採用する
+    var listPriv = csvBoolField(fields, colIndex, "listPrivate");
+    return { kind: kind, item: { id: genId(), text: text, done: done, priv: priv }, listPriv: listPriv };
   }
 
   function parseTripCsv(text) {
@@ -4390,7 +4538,10 @@
       lang: trip.lang,
       days: [],
       packing: JSON.parse(JSON.stringify(trip.packing)),
-      todos: JSON.parse(JSON.stringify(trip.todos))
+      todos: JSON.parse(JSON.stringify(trip.todos)),
+      // 非公開マーク（14拡張）: 第2テーブルが無い旧CSVでも既存値を引き継ぐ（後方互換）
+      packingPriv: trip.packingPriv,
+      todosPriv: trip.todosPriv
     };
 
     if (rows.length === 0) {
@@ -4465,6 +4616,9 @@
           startTime: fields[colIndex.start] || "09:00",
           // 時差対応（13）: tz は任意列。旧CSV（列が無い）では colIndex.tz が undefined になり "" にフォールバックする
           tz: (colIndex.tz != null ? fields[colIndex.tz] : "") || "",
+          // 非公開マーク（14拡張）: dayPrivate は任意列。旧CSVでは false 扱い。
+          // 同一 day の最初の行の値を採用する（dayMap[dayNum] はここで一度だけ作られるため自然に満たされる）
+          priv: csvBoolField(fields, colIndex, "dayPrivate"),
           items: []
         };
         dayOrder.push(dayNum);
@@ -4502,6 +4656,12 @@
         );
         var newPacking = [];
         var newTodos = [];
+        // 非公開マーク（14拡張）: listPrivate は同一 list（持ち物/やること）の最初の行の値を採用する。
+        // その list に属す行が1つも無ければ（空リスト）既定 false になる（既知の制限。SPEC 14参照）
+        var newPackingPriv = false;
+        var newTodosPriv = false;
+        var packingPrivSet = false;
+        var todosPrivSet = false;
         for (var j = blankIdx + 2; j < rows.length; j++) {
           var listLineNo = j + 1;
           var listFields = rows[j];
@@ -4521,12 +4681,22 @@
 
           if (parsed.kind === "packing") {
             newPacking.push(parsed.item);
+            if (!packingPrivSet) {
+              newPackingPriv = parsed.listPriv;
+              packingPrivSet = true;
+            }
           } else {
             newTodos.push(parsed.item);
+            if (!todosPrivSet) {
+              newTodosPriv = parsed.listPriv;
+              todosPrivSet = true;
+            }
           }
         }
         newTrip.packing = newPacking;
         newTrip.todos = newTodos;
+        newTrip.packingPriv = newPackingPriv;
+        newTrip.todosPriv = newTodosPriv;
       }
     }
 
@@ -4823,7 +4993,8 @@
     });
 
     el.addDayBtn.addEventListener("click", function () {
-      trip.days.push({ date: "", startTime: "09:00", tz: "", items: [] });
+      if (viewOnly) return;
+      trip.days.push({ date: "", startTime: "09:00", tz: "", priv: false, items: [] });
       currentDayIndex = trip.days.length - 1;
       saveState();
       render();
@@ -4878,6 +5049,15 @@
       saveState();
       render();
     });
+    // 非公開マーク（14拡張）: 日単位の🔓/🔒トグル。表示/非表示はCSSの .view-only-mode スコープで制御する
+    if (el.dayPrivToggle) {
+      el.dayPrivToggle.addEventListener("click", function () {
+        var day = trip.days[currentDayIndex];
+        day.priv = !day.priv;
+        saveState();
+        render();
+      });
+    }
 
     el.printBtn.addEventListener("click", handlePrintClick);
 
@@ -4921,6 +5101,18 @@
         addChecklistItem("todos", "main");
       }
     });
+    // 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグル（メイン）。
+    // 表示/非表示はCSSの .view-only-mode スコープで制御する
+    if (el.packingListPrivToggle) {
+      el.packingListPrivToggle.addEventListener("click", function () {
+        toggleListPriv("packing");
+      });
+    }
+    if (el.todosListPrivToggle) {
+      el.todosListPrivToggle.addEventListener("click", function () {
+        toggleListPriv("todos");
+      });
+    }
 
     // 準備リストへのクイックアクセス（11）: ヘッダー🧳ボタン・準備モーダル
     el.prepBtn.addEventListener("click", openPrepModal);
@@ -4942,6 +5134,17 @@
         addChecklistItem("todos", "prep");
       }
     });
+    // 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグル（準備モーダル）
+    if (el.prepPackingListPrivToggle) {
+      el.prepPackingListPrivToggle.addEventListener("click", function () {
+        toggleListPriv("packing");
+      });
+    }
+    if (el.prepTodosListPrivToggle) {
+      el.prepTodosListPrivToggle.addEventListener("click", function () {
+        toggleListPriv("todos");
+      });
+    }
 
     el.mapToggleBtn.addEventListener("click", toggleMapPanel);
     el.mapUpdateBtn.addEventListener("click", runMapUpdate);
