@@ -35,6 +35,22 @@
   var PLACES_NAME_BIAS_RADIUS_M = 1000;
   // Cloud Translation API v2（3c 追記のフォールバック・6e のタイトル自動翻訳で共用）
   var TRANSLATE_API_URL = "https://translation.googleapis.com/language/translate/v2";
+
+  // Google ログイン＋Firestore クラウド保存（15）
+  // このプロジェクトの Firebase 設定値。クライアントに埋め込む前提の公開値（APIキーではなくプロジェクト識別子）のため
+  // ソースへの直書きで問題ない（Firestoreセキュリティルール側でアクセス制御する）
+  var FIREBASE_CONFIG = {
+    apiKey: "AIzaSyD3b2pBgjErPhUBk5BDOCCoptmviLF-_w4",
+    authDomain: "tabi-no-shiori-71b24.firebaseapp.com",
+    projectId: "tabi-no-shiori-71b24",
+    storageBucket: "tabi-no-shiori-71b24.firebasestorage.app",
+    messagingSenderId: "475792958330",
+    appId: "1:475792958330:web:eca398575e7aca68126cc3"
+  };
+  var CLOUD_TRIPS_COLLECTION = "trips";
+  // 公開層と公開URL（16）: 誰でも読める公開コピー用コレクション。ドキュメントIDはFirestore自動採番（publicId）
+  var CLOUD_PUBLIC_TRIPS_COLLECTION = "publicTrips";
+  var CLOUD_SYNC_DEBOUNCE_MS = 2000;
   // 手段セレクトの値 -> Routes API travelMode（plane/other はAPI照会対象外）
   var MODE_TO_API_TRAVELMODE = {
     walk: "WALK",
@@ -67,11 +83,32 @@
   var nameFetchToken = 0;
   var nameFetchToastEl = null;
   var confirmCallback = null;
+  // しおりのアーカイブ（11）: しおり一覧モーダルの「アーカイブ済みを見る」トグルの開閉状態。
+  // モーダルを開き直すたびにリセットする（既定は閉じた状態）
+  var tripsArchivedOpen = false;
   var dragState = null;
   var leafletMap = null;
   var mapMarkersLayer = null;
   var mapLineLayer = null;
   var mapReady = false;
+
+  // Google ログイン＋Firestore クラウド保存（15）
+  var firebaseReady = false; // SDK読み込み＋初期化に成功したか（失敗時はログイン機能を静かに無効化する）
+  var fbAuth = null;
+  var fbDb = null;
+  var authUser = null; // 未ログインは null。ログイン時は { uid, email, displayName, photoURL }
+  var cloudSyncTimer = null;
+  var cloudSyncErrorShown = false; // 書き込みエラーのトーストは連続失敗時に1回だけ出す
+  var cloudMergeInProgress = false;
+  // trips への add（cloudId 採番）実行中のエントリ: entry.id -> Promise。
+  // 採番の完了を待たずに同じエントリを再度書き込むと add が二重に走り、
+  // クラウド上にしおりが重複作成されてしまうため、実行中は後続の書き込みを待たせる
+  var cloudAddInFlight = {};
+
+  // 公開層と公開URL（16）: #p=<publicId> で起動したときの読み取り専用モード。
+  // true の間は saveState() が完全に no-op になり、ローカルストレージ・クラウドへの書き込みは一切発生しない。
+  // trip 変数は一時的に「他人の公開コピー」を指すが、tripsStore/currentTripId は自分のローカルデータのまま変更しない
+  var viewOnly = false;
 
   var el = {};
 
@@ -199,6 +236,7 @@
   }
 
   function handleGmapChange(item, rawValue) {
+    if (viewOnly) return;
     var value = (rawValue || "").trim();
     var prevGmap = item.gmap || "";
     if (value === prevGmap) return;
@@ -324,18 +362,35 @@
 
   // trip 変数は常に tripsStore 内エントリの data と同一参照のため、
   // 保存は tripsStore 全体を書き出すだけでよい（該当エントリの内容は自動的に反映される）
-  function saveState() {
+  // localStorage への書き込みのみを行う（クラウド同期はここでは行わない）。
+  // Google ログイン＋Firestore クラウド保存（15）のマージ処理など、クラウド書き込みを誘発したくない
+  // 内部更新から呼ぶための下請け関数
+  function persistLocalOnly() {
     try {
       var storeObj = {
         currentId: currentTripId,
         trips: tripsStore.map(function (e) {
-          return { id: e.id, data: e.data };
+          // しおりのアーカイブ（11）: archived は trips エントリ側のフィールド（trip データ本体には含めない）
+          // cloudId/updatedAt（15）も同様に trips エントリ側のフィールド
+          // publicId（16）: 公開層に発行されたら Firestore の publicTrips ドキュメントID。未公開は null
+          return { id: e.id, data: e.data, archived: !!e.archived, cloudId: e.cloudId || null, updatedAt: e.updatedAt || 0, publicId: e.publicId || null };
         })
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(storeObj));
     } catch (e) {
       console.warn("save failed", e);
     }
+  }
+
+  // 通常の保存経路。ローカル保存は従来どおり即時。
+  // ログイン中は、現在のしおりの変更をデバウンス（2秒）してクラウドにも書き込む（15）
+  // 公開URL閲覧（16）: viewOnly 中は何もしない。読み取り専用モードでローカルデータを汚染しないための最重要ガード
+  function saveState() {
+    if (viewOnly) return;
+    var entry = getCurrentEntry();
+    if (entry) entry.updatedAt = Date.now();
+    persistLocalOnly();
+    scheduleCloudSync();
   }
 
   // v2 ストレージを読み込む。壊れたJSON・不正な構造は null を返し、呼び出し元でフォールバックさせる
@@ -349,7 +404,17 @@
         .map(function (entry) {
           if (!entry || typeof entry !== "object" || !entry.data || !Array.isArray(entry.data.days)) return null;
           var id = typeof entry.id === "string" && entry.id ? entry.id : genId();
-          return { id: id, data: normalizeTrip(entry.data) };
+          // しおりのアーカイブ（11）: archived は防御的に正規化（既定 false）
+          // cloudId/updatedAt（15）: クラウド同期用の対応付け。無ければ null/0（未同期）
+          // publicId（16）: 公開層のドキュメントID。無ければ null（未公開）
+          return {
+            id: id,
+            data: normalizeTrip(entry.data),
+            archived: !!entry.archived,
+            cloudId: typeof entry.cloudId === "string" && entry.cloudId ? entry.cloudId : null,
+            updatedAt: typeof entry.updatedAt === "number" && isFinite(entry.updatedAt) ? entry.updatedAt : 0,
+            publicId: typeof entry.publicId === "string" && entry.publicId ? entry.publicId : null
+          };
         })
         .filter(Boolean);
       if (trips.length === 0) return null;
@@ -357,7 +422,13 @@
       var hasCurrent = trips.some(function (e) {
         return e.id === currentId;
       });
-      if (!hasCurrent) currentId = trips[0].id;
+      if (!hasCurrent) {
+        // 可能ならアーカイブされていないしおりへフォールバックする
+        var firstActive = trips.find(function (e) {
+          return !e.archived;
+        });
+        currentId = firstActive ? firstActive.id : trips[0].id;
+      }
       return { currentId: currentId, trips: trips };
     } catch (e) {
       return null;
@@ -379,7 +450,7 @@
       var parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.days)) {
         var id = genId();
-        result = { currentId: id, trips: [{ id: id, data: normalizeTrip(parsed) }] };
+        result = { currentId: id, trips: [{ id: id, data: normalizeTrip(parsed), archived: false, cloudId: null, updatedAt: 0, publicId: null }] };
       }
     } catch (e) {
       /* 壊れたJSON: 移行データなしとして扱う（起動は壊さない） */
@@ -489,13 +560,35 @@
     return titles;
   }
 
+  // 持ち物リスト・やることリスト（10）: [{id, text, done, priv}] の配列を防御的に正規化する。
+  // text は文字列、done/priv は boolean、id が無ければ genId() で発行する。
+  // priv（非公開マーク。既定 false）は 14 参照
+  function normalizeChecklist(raw) {
+    var list = [];
+    if (Array.isArray(raw)) {
+      raw.forEach(function (it) {
+        if (!it || typeof it !== "object") return;
+        list.push({
+          id: typeof it.id === "string" && it.id ? it.id : genId(),
+          text: typeof it.text === "string" ? it.text : "",
+          done: !!it.done,
+          priv: !!it.priv
+        });
+      });
+    }
+    return list;
+  }
+
   function normalizeTrip(raw) {
     var out = {
       v: 1,
       title: typeof raw.title === "string" ? raw.title : "",
       titles: normalizeTitles(raw.titles),
       lang: window.I18N.LANGUAGES.indexOf(raw.lang) !== -1 ? raw.lang : lang(),
-      days: []
+      days: [],
+      // 持ち物リスト・やることリスト（10）: しおり単位（日ごとではない）。共有リンク・localStorageに含まれる
+      packing: normalizeChecklist(raw.packing),
+      todos: normalizeChecklist(raw.todos)
     };
     var days = Array.isArray(raw.days) ? raw.days : [];
     if (days.length === 0) {
@@ -505,6 +598,8 @@
       var day = {
         date: typeof d.date === "string" ? d.date : "",
         startTime: typeof d.startTime === "string" && d.startTime ? d.startTime : "09:00",
+        // 時差対応（13）: IANAタイムゾーン文字列。既定 ""＝時差計算なし。文字列のみ許容する防御的正規化
+        tz: typeof d.tz === "string" ? d.tz : "",
         items: []
       };
       var items = Array.isArray(d.items) ? d.items : [];
@@ -519,7 +614,11 @@
           note: typeof it.note === "string" ? it.note : "",
           lat: typeof it.lat === "number" && isFinite(it.lat) ? it.lat : null,
           lon: typeof it.lon === "number" && isFinite(it.lon) ? it.lon : null,
-          coordSrc: it.coordSrc === "gmap" || it.coordSrc === "geo" ? it.coordSrc : null
+          coordSrc: it.coordSrc === "gmap" || it.coordSrc === "geo" ? it.coordSrc : null,
+          // 非公開マーク（14）: priv=項目まるごと非公開、notePriv=メモのみ非公開。既定 false。
+          // move含む全カテゴリー共通。boolean 以外の型は防御的に既定値へフォールバック
+          priv: !!it.priv,
+          notePriv: !!it.notePriv
         };
         if (item.lat == null || item.lon == null) {
           item.coordSrc = null;
@@ -530,6 +629,8 @@
           item.auto = !!it.auto;
           item.approx = !!it.approx;
           item.unresolved = !!it.unresolved;
+          // 時差対応（13）: 到着地のIANAタイムゾーン文字列（任意）。既定 ""＝時差なし
+          item.arriveTz = typeof it.arriveTz === "string" ? it.arriveTz : "";
         } else {
           item.gmap = typeof it.gmap === "string" ? it.gmap : "";
           // 地図更新ボタンが自動入力した gmap リンクかどうかのフラグ（3b追記）
@@ -544,22 +645,527 @@
   }
 
   /* =========================================================
+   * 非公開マークと公開用データ（14）
+   * Google ログイン＋Firestore 連携（15、後続実装）の土台。
+   * 「本人だけが読める完全データ」と「誰でも読める公開コピー」の2層に分ける設計のうち、
+   * 公開コピーを作る側（priv/notePriv フラグに基づくサニタイズ）をここで実装する。
+   * ========================================================= */
+
+  // day.items（フィルタ前の元配列）内で idx の move の前後の非move項目を探す。
+  // findAdjacentStops と同じロジックだが、サニタイズ時は任意の items 配列に対して使えるよう
+  // day 引数を取らず items 配列を直接受け取る形にしている
+  function findAdjacentStopsInItems(items, idx) {
+    var prev = null;
+    for (var i = idx - 1; i >= 0; i--) {
+      if (items[i].cat !== "move") {
+        prev = items[i];
+        break;
+      }
+    }
+    var next = null;
+    for (var j = idx + 1; j < items.length; j++) {
+      if (items[j].cat !== "move") {
+        next = items[j];
+        break;
+      }
+    }
+    return { prev: prev, next: next };
+  }
+
+  // 公開用サニタイズ（14の中核）。引数を一切変更しない純粋関数。
+  // - priv: true の行程項目・持ち物/やること要素を削除する
+  // - notePriv: true の項目は note を空文字にする（項目自体は残す）
+  // - 非公開項目の削除で隣接スポットを失う自動生成 move（auto: true）も一緒に削除する
+  //   （手動追加の move (auto: false) は隣接スポットが消えても残す）
+  // - 結果から priv / notePriv フラグ自体を取り除く（公開データに痕跡を残さない）
+  function sanitizeTripForPublic(tripData) {
+    var clone = JSON.parse(JSON.stringify(tripData || {}));
+
+    if (Array.isArray(clone.days)) {
+      clone.days.forEach(function (day) {
+        var items = Array.isArray(day.items) ? day.items : [];
+
+        // 1. priv:true の項目（moveも含む）を「削除対象」として記録する
+        var removedIds = {};
+        items.forEach(function (it) {
+          if (it && it.priv) removedIds[it.id] = true;
+        });
+
+        // 2. 削除対象ではない auto move のうち、削除前の隣接スポット（prev/next）のいずれかが
+        //    削除対象だったものも、あわせて削除対象にする（手動 move はここで対象にしない）
+        items.forEach(function (it, idx) {
+          if (it && it.cat === "move" && it.auto && !removedIds[it.id]) {
+            var neighbors = findAdjacentStopsInItems(items, idx);
+            var prevRemoved = neighbors.prev && removedIds[neighbors.prev.id];
+            var nextRemoved = neighbors.next && removedIds[neighbors.next.id];
+            if (prevRemoved || nextRemoved) {
+              removedIds[it.id] = true;
+            }
+          }
+        });
+
+        // 3. notePriv:true の項目（削除されないもの）は note を空にする
+        items.forEach(function (it) {
+          if (it && it.notePriv) it.note = "";
+        });
+
+        // 4. 削除対象を取り除き、priv/notePriv フラグ自体も消す
+        day.items = items
+          .filter(function (it) {
+            return !removedIds[it.id];
+          })
+          .map(function (it) {
+            delete it.priv;
+            delete it.notePriv;
+            return it;
+          });
+      });
+    }
+
+    ["packing", "todos"].forEach(function (key) {
+      if (!Array.isArray(clone[key])) return;
+      clone[key] = clone[key]
+        .filter(function (it) {
+          return !(it && it.priv);
+        })
+        .map(function (it) {
+          delete it.priv;
+          return it;
+        });
+    });
+
+    return clone;
+  }
+
+  // sanitizeTripForPublic の適用前後で除外された件数（行程項目＋持ち物＋やること合計）を数える。
+  // 公開プレビュー（14）の「非公開のため n 件を除外しました」表示に使う
+  function countSanitizedExclusions(original, sanitized) {
+    function countItems(data) {
+      var n = 0;
+      (data.days || []).forEach(function (d) {
+        n += (d.items || []).length;
+      });
+      return n + (data.packing || []).length + (data.todos || []).length;
+    }
+    return countItems(original) - countItems(sanitized);
+  }
+
+  /* =========================================================
+   * Google ログイン＋Firestore クラウド保存（15、プライベート層）
+   * 「本人だけが読める完全データ」を Firestore に保存する。公開層（publicTrips・公開URL）は次段階で実装する。
+   * Firebase SDKが読み込めない・初期化に失敗した場合はここから先の関数が呼ばれても静かに何もせず、
+   * アプリはローカル動作のみで完全に機能する（この節の関数は必ず firebaseReady / fbAuth / fbDb / authUser を確認する）
+   * ========================================================= */
+
+  // Firebase SDK（vendor/firebase、compat版）の初期化。失敗しても例外を外に漏らさない
+  function initFirebase() {
+    try {
+      if (!window.firebase || typeof window.firebase.initializeApp !== "function") return;
+      window.firebase.initializeApp(FIREBASE_CONFIG);
+      fbAuth = window.firebase.auth();
+      fbDb = window.firebase.firestore();
+      firebaseReady = true;
+      fbAuth.onAuthStateChanged(handleAuthStateChanged);
+    } catch (e) {
+      // SDK未読み込み・設定不正などはすべてここに落ちる。ログイン機能を無効化するだけでアプリ自体は継続する
+      firebaseReady = false;
+      fbAuth = null;
+      fbDb = null;
+    }
+  }
+
+  function handleAuthStateChanged(user) {
+    var wasLoggedIn = !!authUser;
+    authUser = user
+      ? { uid: user.uid, email: user.email || "", displayName: user.displayName || "", photoURL: user.photoURL || "" }
+      : null;
+    renderAuthUI();
+    if (authUser && !wasLoggedIn) {
+      cloudSyncErrorShown = false;
+      runCloudMerge();
+    }
+  }
+
+  function loginWithGoogle() {
+    if (!firebaseReady || !fbAuth || !window.firebase.auth) return;
+    var provider = new window.firebase.auth.GoogleAuthProvider();
+    fbAuth.signInWithPopup(provider).catch(function (err) {
+      // ポップアップがブロックされた場合はリダイレクト方式にフォールバックする
+      if (err && err.code === "auth/popup-blocked") {
+        fbAuth.signInWithRedirect(provider).catch(function () {
+          /* リダイレクトも失敗した場合は静かに諦める */
+        });
+      }
+    });
+  }
+
+  function logoutFromGoogle() {
+    if (!firebaseReady || !fbAuth) return;
+    fbAuth.signOut();
+  }
+
+  // 書き込み/読み込みエラーは静かに握りつぶすが、連続失敗時はトーストを1回だけ出す。成功したらフラグを戻す
+  function handleCloudError(err) {
+    console.warn("cloud sync failed", err && err.code);
+    if (!cloudSyncErrorShown) {
+      cloudSyncErrorShown = true;
+      showToast(t("auth.syncError"), "error");
+    }
+  }
+  function handleCloudSuccess() {
+    cloudSyncErrorShown = false;
+  }
+
+  // JSON文字列を安全にパースする（壊れたデータ・型不正は null）
+  function safeParseTripJSON(str) {
+    try {
+      var parsed = JSON.parse(str);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // 現在のしおりをデバウンス（2秒）してクラウドへ書き込む。ログインしていなければ何もしない
+  function scheduleCloudSync() {
+    if (!authUser || !firebaseReady) return;
+    if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+    cloudSyncTimer = setTimeout(function () {
+      cloudSyncTimer = null;
+      cloudUpsertEntry(getCurrentEntry());
+    }, CLOUD_SYNC_DEBOUNCE_MS);
+  }
+
+  // 1件の trips エントリを Firestore に書き込む（新規なら作成して cloudId を採番、既存なら更新）。即時実行。
+  // trip 本体は JSON 文字列にして保存する（ネスト構造のまま入れると型制約で事故りやすいため）
+  // 公開層と公開URL（16）: publicId も併せて書き込み、端末間で公開状態を引き継げるようにする。
+  // 書き込み成功後、publicId を持つエントリなら公開コピー（publicTrips）もあわせて更新する（syncPublicCopyIfPublished）
+  function cloudUpsertEntry(entry) {
+    if (!firebaseReady || !fbDb || !authUser || !entry) return;
+    // 同じエントリの add（cloudId 採番）が実行中なら、完了を待ってから書き込み直す。
+    // 待たずに進むと cloudId が未設定のまま再度 add され、クラウド上でしおりが重複する
+    // （例: ログイン直後のマージによるアップロードが完了する前に公開トグルを押した場合）
+    if (!entry.cloudId && cloudAddInFlight[entry.id]) {
+      cloudAddInFlight[entry.id].then(function () {
+        cloudUpsertEntry(entry);
+      });
+      return;
+    }
+    var updatedAt = Date.now();
+    var payload = {
+      ownerUid: authUser.uid,
+      data: JSON.stringify(entry.data),
+      title: tripDisplayTitle(entry.data) || "",
+      archived: !!entry.archived,
+      updatedAt: updatedAt,
+      schema: 2,
+      publicId: entry.publicId || null
+    };
+    if (entry.cloudId) {
+      fbDb
+        .collection(CLOUD_TRIPS_COLLECTION)
+        .doc(entry.cloudId)
+        .set(payload, { merge: true })
+        .then(function () {
+          entry.updatedAt = updatedAt;
+          handleCloudSuccess();
+          syncPublicCopyIfPublished(entry);
+        })
+        .catch(handleCloudError);
+    } else {
+      cloudAddInFlight[entry.id] = fbDb
+        .collection(CLOUD_TRIPS_COLLECTION)
+        .add(payload)
+        .then(function (docRef) {
+          entry.cloudId = docRef.id;
+          entry.updatedAt = updatedAt;
+          persistLocalOnly(); // cloudId の採番結果を保存する（クラウド書き込みは誘発しない）
+          if (el.tripsModal && !el.tripsModal.classList.contains("hidden")) renderTripsList();
+          handleCloudSuccess();
+          syncPublicCopyIfPublished(entry);
+        })
+        .catch(handleCloudError)
+        .then(function () {
+          // 成功・失敗いずれでも実行中フラグは必ず解除する（待機中の書き込みを進ませる）
+          delete cloudAddInFlight[entry.id];
+        });
+    }
+  }
+
+  // 公開層と公開URL（16）: entry.publicId があるときだけ、公開コピー（publicTrips/{publicId}）を
+  // 常にサニタイズ済みデータで上書きする。既存の cloud sync デバウンス処理（scheduleCloudSync → cloudUpsertEntry）に
+  // 相乗りするため、公開中のしおりを編集すれば自動的に公開コピーも更新される
+  function syncPublicCopyIfPublished(entry) {
+    if (!entry || !entry.publicId || !firebaseReady || !fbDb || !authUser) return;
+    var sanitized = sanitizeTripForPublic(entry.data);
+    fbDb
+      .collection(CLOUD_PUBLIC_TRIPS_COLLECTION)
+      .doc(entry.publicId)
+      .set(
+        {
+          ownerUid: authUser.uid,
+          data: JSON.stringify(sanitized),
+          title: tripDisplayTitle(entry.data) || "",
+          updatedAt: Date.now(),
+          schema: 2
+        },
+        { merge: true }
+      )
+      .then(handleCloudSuccess)
+      .catch(handleCloudError);
+  }
+
+  // 1件の trips エントリを Firestore から削除する（cloudId が無ければ何もしない）
+  function cloudDeleteEntry(entry) {
+    if (!firebaseReady || !fbDb || !authUser || !entry || !entry.cloudId) return;
+    fbDb
+      .collection(CLOUD_TRIPS_COLLECTION)
+      .doc(entry.cloudId)
+      .delete()
+      .then(handleCloudSuccess)
+      .catch(handleCloudError);
+  }
+
+  /* =========================================================
+   * 公開層と公開URL（16）
+   * ログイン時のみ、しおりのサニタイズ済みコピーを誰でも読める publicTrips/{publicId} に書き出す。
+   * publicId は Firestore 自動採番のドキュメントID（推測されにくい）。
+   * ========================================================= */
+
+  // 共有モーダルの「🌐 公開する」トグルON。新規公開なら publicTrips に自動IDで作成し、
+  // 既存の publicId があれば（多くはここには来ないが念のため）上書き更新する。
+  // 成功後は publicId をローカル・プライベート層（trips/{cloudId}）の両方へ保存する
+  function publishCurrentTrip(onDone) {
+    if (viewOnly || !authUser || !firebaseReady || !fbDb) return;
+    var entry = getCurrentEntry();
+    if (!entry) return;
+    var sanitized = sanitizeTripForPublic(entry.data);
+    var payload = {
+      ownerUid: authUser.uid,
+      data: JSON.stringify(sanitized),
+      title: tripDisplayTitle(entry.data) || "",
+      updatedAt: Date.now(),
+      schema: 2
+    };
+    var ref = entry.publicId
+      ? fbDb.collection(CLOUD_PUBLIC_TRIPS_COLLECTION).doc(entry.publicId).set(payload, { merge: true }).then(function () {
+          return entry.publicId;
+        })
+      : fbDb
+          .collection(CLOUD_PUBLIC_TRIPS_COLLECTION)
+          .add(payload)
+          .then(function (docRef) {
+            return docRef.id;
+          });
+    ref
+      .then(function (publicId) {
+        entry.publicId = publicId;
+        persistLocalOnly();
+        cloudUpsertEntry(entry); // publicId をプライベート層（trips/{cloudId}）にも即時反映する
+        handleCloudSuccess();
+        if (typeof onDone === "function") onDone(true);
+      })
+      .catch(function (err) {
+        handleCloudError(err);
+        if (typeof onDone === "function") onDone(false);
+      });
+  }
+
+  // 共有モーダルの「🌐 公開する」トグルOFF。publicTrips のドキュメントを削除し、
+  // ローカル・プライベート層両方の publicId を null に戻す
+  function unpublishCurrentTrip(onDone) {
+    if (viewOnly || !authUser || !firebaseReady || !fbDb) return;
+    var entry = getCurrentEntry();
+    if (!entry || !entry.publicId) return;
+    var publicIdToDelete = entry.publicId;
+    fbDb
+      .collection(CLOUD_PUBLIC_TRIPS_COLLECTION)
+      .doc(publicIdToDelete)
+      .delete()
+      .then(function () {
+        entry.publicId = null;
+        persistLocalOnly();
+        cloudUpsertEntry(entry);
+        handleCloudSuccess();
+        showToast(t("share.unpublished"));
+        if (typeof onDone === "function") onDone(true);
+      })
+      .catch(function (err) {
+        handleCloudError(err);
+        if (typeof onDone === "function") onDone(false);
+      });
+  }
+
+  // ログイン直後のマージ計画を組み立てる純粋関数（Firestore呼び出しを含まないため、スタブ無しで単体テスト可能）。
+  // - cloudId を持つローカルエントリ: 対応するクラウド文書と updatedAt を比較し、新しい方を採用する
+  //   （クラウドが新しければローカルを更新対象に、ローカルが新しい/同値ならアップロード対象にする。
+  //   対応する文書が見当たらない場合＝クラウド側で消えた場合も、アップロードして復元する）
+  // - cloudId を持たないローカルエントリ（ログイン前に作成したしおり）: 常にアップロード対象にする
+  // - どのローカルエントリにも対応しないクラウド文書: 新規ローカルエントリとして追加する対象にする
+  function computeTripsMergePlan(localTrips, cloudDocs) {
+    var uploads = [];
+    var localUpdates = [];
+    var newLocalEntries = [];
+    var usedCloudIds = {};
+
+    (localTrips || []).forEach(function (entry) {
+      if (entry.cloudId) {
+        var match = null;
+        for (var i = 0; i < cloudDocs.length; i++) {
+          if (cloudDocs[i].id === entry.cloudId) {
+            match = cloudDocs[i];
+            break;
+          }
+        }
+        if (match) {
+          usedCloudIds[match.id] = true;
+          var localUpdatedAt = entry.updatedAt || 0;
+          var cloudUpdatedAt = match.updatedAt || 0;
+          if (cloudUpdatedAt > localUpdatedAt) {
+            localUpdates.push({ entry: entry, cloudDoc: match });
+          } else {
+            uploads.push(entry);
+          }
+        } else {
+          uploads.push(entry);
+        }
+      } else {
+        uploads.push(entry);
+      }
+    });
+
+    (cloudDocs || []).forEach(function (doc) {
+      if (!usedCloudIds[doc.id]) newLocalEntries.push(doc);
+    });
+
+    return { uploads: uploads, localUpdates: localUpdates, newLocalEntries: newLocalEntries };
+  }
+
+  // マージ計画（computeTripsMergePlan）を実際の tripsStore に適用し、ローカル更新・追加を反映してから
+  // アップロード対象をクラウドへ書き込む。最後にマージ内容をトーストで通知する
+  function applyCloudMergePlan(plan) {
+    plan.localUpdates.forEach(function (u) {
+      var parsed = safeParseTripJSON(u.cloudDoc.data);
+      if (parsed) {
+        u.entry.data = normalizeTrip(parsed);
+        // 公開URL閲覧（16）: viewOnly 中は trip が他人の公開コピーを指しているため上書きしない
+        if (!viewOnly && u.entry.id === currentTripId) trip = u.entry.data;
+      }
+      u.entry.archived = !!u.cloudDoc.archived;
+      u.entry.updatedAt = u.cloudDoc.updatedAt || 0;
+      // 公開層と公開URL（16）: publicId も端末間で引き継ぐ
+      u.entry.publicId = u.cloudDoc.publicId || null;
+    });
+
+    plan.newLocalEntries.forEach(function (doc) {
+      var parsed = safeParseTripJSON(doc.data);
+      tripsStore.push({
+        id: genId(),
+        data: normalizeTrip(parsed || createBlankTripData()),
+        archived: !!doc.archived,
+        cloudId: doc.id,
+        updatedAt: doc.updatedAt || 0,
+        publicId: doc.publicId || null
+      });
+    });
+
+    persistLocalOnly();
+    render();
+
+    plan.uploads.forEach(function (entry) {
+      cloudUpsertEntry(entry);
+    });
+
+    var total = plan.uploads.length + plan.localUpdates.length + plan.newLocalEntries.length;
+    if (total > 0) {
+      showToast(t("auth.syncDone", { n: total }));
+    }
+  }
+
+  // ログイン直後に1回だけ実行する、クラウドとローカルの突き合わせ処理
+  function runCloudMerge() {
+    if (!firebaseReady || !fbDb || !authUser || cloudMergeInProgress) return;
+    cloudMergeInProgress = true;
+    fbDb
+      .collection(CLOUD_TRIPS_COLLECTION)
+      .where("ownerUid", "==", authUser.uid)
+      .get()
+      .then(function (snapshot) {
+        var cloudDocs = [];
+        snapshot.forEach(function (doc) {
+          var d = doc.data() || {};
+          cloudDocs.push({
+            id: doc.id,
+            data: typeof d.data === "string" ? d.data : "",
+            archived: !!d.archived,
+            updatedAt: typeof d.updatedAt === "number" && isFinite(d.updatedAt) ? d.updatedAt : 0,
+            publicId: typeof d.publicId === "string" && d.publicId ? d.publicId : null
+          });
+        });
+        var plan = computeTripsMergePlan(tripsStore, cloudDocs);
+        applyCloudMergePlan(plan);
+        cloudMergeInProgress = false;
+      })
+      .catch(function (err) {
+        cloudMergeInProgress = false;
+        handleCloudError(err);
+      });
+  }
+
+  // ヘッダーの認証ボタン・アカウントモーダルの表示を、現在の authUser / firebaseReady に合わせて更新する
+  function renderAuthUI() {
+    if (!el.authBtn) return;
+    if (!firebaseReady) {
+      // SDK読み込み・初期化に失敗: ログイン機能自体を静かに隠す（トースト等は出さない）
+      el.authBtn.classList.add("hidden");
+      return;
+    }
+    el.authBtn.classList.remove("hidden");
+    if (authUser) {
+      el.authBtn.classList.add("auth-btn-loggedin");
+      var initial = (authUser.displayName || authUser.email || "?").trim().charAt(0).toUpperCase();
+      el.authBtnContent.textContent = initial || "👤";
+      el.authBtn.title = authUser.email || "";
+      el.authBtn.setAttribute("aria-label", authUser.email || t("auth.menuTitle"));
+      if (el.authEmail) el.authEmail.textContent = authUser.email || "";
+    } else {
+      el.authBtn.classList.remove("auth-btn-loggedin");
+      el.authBtnContent.textContent = t("auth.login");
+      el.authBtn.title = t("auth.login");
+      el.authBtn.setAttribute("aria-label", t("auth.login"));
+      if (!el.authModal.classList.contains("hidden")) closeModal(el.authModal);
+    }
+    if (el.tripsSyncStatus) el.tripsSyncStatus.classList.toggle("hidden", !authUser);
+  }
+
+  function onAuthBtnClick() {
+    if (!firebaseReady) return;
+    if (authUser) {
+      openModal(el.authModal);
+    } else {
+      loginWithGoogle();
+    }
+  }
+
+  /* =========================================================
    * サンプルデータ
    * ========================================================= */
   function createSampleTrip() {
     var items = [
-      { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
-      { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true },
-      { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
-      { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
-      { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} }
+      { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", priv: false, notePriv: false, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
+      { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", priv: false, notePriv: false, lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true, arriveTz: "" },
+      { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", priv: false, notePriv: false, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
+      { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", priv: false, notePriv: false, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
+      { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", priv: false, notePriv: false, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} }
     ];
     return {
       v: 1,
       title: "東京旅行",
       titles: Object.assign({}, window.I18N.SAMPLE_TRIP_TITLES),
       lang: "ja",
-      days: [{ date: "2026-07-20", startTime: "09:00", items: items }]
+      days: [{ date: "2026-07-20", startTime: "09:00", tz: "", items: items }],
+      packing: [],
+      todos: []
     };
   }
 
@@ -570,7 +1176,9 @@
       title: window.I18N.NEW_TRIP_TITLES.ja,
       titles: Object.assign({}, window.I18N.NEW_TRIP_TITLES),
       lang: lang(),
-      days: [{ date: "", startTime: "09:00", items: [] }]
+      days: [{ date: "", startTime: "09:00", tz: "", items: [] }],
+      packing: [],
+      todos: []
     };
   }
 
@@ -587,6 +1195,8 @@
     el.addDayBtn = document.getElementById("addDayBtn");
     el.dayDateInput = document.getElementById("dayDateInput");
     el.dayStartTimeInput = document.getElementById("dayStartTimeInput");
+    el.dayTzSelect = document.getElementById("dayTzSelect");
+    el.printBtn = document.getElementById("printBtn");
     el.routeBtn = document.getElementById("routeBtn");
     el.routeBtnLabel = document.getElementById("routeBtnLabel");
     el.timeline = document.getElementById("timeline");
@@ -598,9 +1208,55 @@
     el.addNote = document.getElementById("addNote");
     el.addBtn = document.getElementById("addBtn");
 
+    // 持ち物リスト・やることリスト（10）: タイムライン下（メイン）
+    el.packingItems = document.getElementById("packingItems");
+    el.packingEmptyMsg = document.getElementById("packingEmptyMsg");
+    el.packingProgress = document.getElementById("packingProgress");
+    el.packingAddInput = document.getElementById("packingAddInput");
+    el.packingAddBtn = document.getElementById("packingAddBtn");
+    el.todosItems = document.getElementById("todosItems");
+    el.todosEmptyMsg = document.getElementById("todosEmptyMsg");
+    el.todosProgress = document.getElementById("todosProgress");
+    el.todosAddInput = document.getElementById("todosAddInput");
+    el.todosAddBtn = document.getElementById("todosAddBtn");
+
+    // 準備リストへのクイックアクセス（11）: ヘッダーの🧳ボタン・準備モーダル内の同UI
+    el.prepBtn = document.getElementById("prepBtn");
+    el.prepBadge = document.getElementById("prepBadge");
+    el.prepModal = document.getElementById("prepModal");
+    el.prepPackingItems = document.getElementById("prepPackingItems");
+    el.prepPackingEmptyMsg = document.getElementById("prepPackingEmptyMsg");
+    el.prepPackingProgress = document.getElementById("prepPackingProgress");
+    el.prepPackingAddInput = document.getElementById("prepPackingAddInput");
+    el.prepPackingAddBtn = document.getElementById("prepPackingAddBtn");
+    el.prepTodosItems = document.getElementById("prepTodosItems");
+    el.prepTodosEmptyMsg = document.getElementById("prepTodosEmptyMsg");
+    el.prepTodosProgress = document.getElementById("prepTodosProgress");
+    el.prepTodosAddInput = document.getElementById("prepTodosAddInput");
+    el.prepTodosAddBtn = document.getElementById("prepTodosAddBtn");
+
     el.shareModal = document.getElementById("shareModal");
     el.shareUrl = document.getElementById("shareUrl");
     el.shareCopyBtn = document.getElementById("shareCopyBtn");
+    // 非公開マークと公開用データ（14）: 公開プレビューモーダル
+    el.sharePreviewBtn = document.getElementById("sharePreviewBtn");
+    el.publicPreviewModal = document.getElementById("publicPreviewModal");
+    el.publicPreviewContent = document.getElementById("publicPreviewContent");
+    el.publicPreviewExcluded = document.getElementById("publicPreviewExcluded");
+
+    // 公開層と公開URL（16）: 共有モーダルの「🌐 公開する」セクション（ログイン時のみ）
+    el.sharePublicSection = document.getElementById("sharePublicSection");
+    el.sharePublicToggle = document.getElementById("sharePublicToggle");
+    el.sharePublicBadge = document.getElementById("sharePublicBadge");
+    el.sharePublicExcluded = document.getElementById("sharePublicExcluded");
+    el.sharePublicUrlWrap = document.getElementById("sharePublicUrlWrap");
+    el.sharePublicUrl = document.getElementById("sharePublicUrl");
+    el.sharePublicCopyBtn = document.getElementById("sharePublicCopyBtn");
+    el.shareLoginHint = document.getElementById("shareLoginHint");
+
+    // 公開層と公開URL（16）: #p=<publicId> 読み取り専用モードのヘッダー表示
+    el.viewOnlyBanner = document.getElementById("viewOnlyBanner");
+    el.viewOnlyBackBtn = document.getElementById("viewOnlyBackBtn");
 
     el.textioModal = document.getElementById("textioModal");
     el.textioArea = document.getElementById("textioArea");
@@ -614,6 +1270,18 @@
     el.tripsModal = document.getElementById("tripsModal");
     el.tripsList = document.getElementById("tripsList");
     el.tripsNewBtn = document.getElementById("tripsNewBtn");
+    // しおりのアーカイブ（11）
+    el.tripsArchiveToggleBtn = document.getElementById("tripsArchiveToggleBtn");
+    el.tripsArchiveToggleLabel = document.getElementById("tripsArchiveToggleLabel");
+    el.tripsArchivedList = document.getElementById("tripsArchivedList");
+    el.tripsSyncStatus = document.getElementById("tripsSyncStatus");
+
+    // Google ログイン＋Firestore クラウド保存（15）
+    el.authBtn = document.getElementById("authBtn");
+    el.authBtnContent = document.getElementById("authBtnContent");
+    el.authModal = document.getElementById("authModal");
+    el.authEmail = document.getElementById("authEmail");
+    el.authLogoutBtn = document.getElementById("authLogoutBtn");
 
     el.settingsBtn = document.getElementById("settingsBtn");
     el.settingsModal = document.getElementById("settingsModal");
@@ -647,15 +1315,18 @@
 
     window.I18N.applyLanguage(lang());
     applyExtraI18n();
+    applyViewOnlyUI();
 
     renderHeader();
     renderDayTabs();
     renderDayMeta();
     renderTimeline();
     renderAddForm();
+    renderChecklists();
     updateMap();
     updateMapStickyOffset();
     if (el.tripsModal && !el.tripsModal.classList.contains("hidden")) renderTripsList();
+    renderAuthUI();
 
     el.langSelect.value = lang();
   }
@@ -680,6 +1351,23 @@
     if (el.tripTitle) {
       el.tripTitle.setAttribute("data-placeholder", t("header.titlePlaceholder"));
     }
+  }
+
+  // 公開層と公開URL（16）: 読み取り専用モードの共通UI（バナー・編集系ボタン群の非表示・タイトル編集不可化）。
+  // 個々のカード・チェックリスト行はビルド時（buildItemCard/buildChecklistRow）に readOnly/disabled を反映し、
+  // ボタン類の表示/非表示はCSSの .view-only-mode スコープで一括制御する（styles.css参照）
+  function applyViewOnlyUI() {
+    document.body.classList.toggle("view-only-mode", viewOnly);
+    if (el.viewOnlyBanner) el.viewOnlyBanner.classList.toggle("hidden", !viewOnly);
+    // contentEditable プロパティ代入ではなく属性を直接書き換える（属性/プロパティ反映の環境差を避けるため）
+    if (el.tripTitle) el.tripTitle.setAttribute("contenteditable", viewOnly ? "false" : "true");
+    if (el.dayDateInput) el.dayDateInput.readOnly = viewOnly;
+    if (el.dayStartTimeInput) el.dayStartTimeInput.readOnly = viewOnly;
+    if (el.dayTzSelect) el.dayTzSelect.disabled = viewOnly;
+    if (el.textioArea) el.textioArea.readOnly = viewOnly;
+    if (el.textioLoadBtn) el.textioLoadBtn.disabled = viewOnly;
+    if (el.textioOpenFileBtn) el.textioOpenFileBtn.disabled = viewOnly;
+    if (el.textioFileInput) el.textioFileInput.disabled = viewOnly;
   }
 
   function renderHeader() {
@@ -716,15 +1404,148 @@
     var day = trip.days[currentDayIndex];
     el.dayDateInput.value = day.date || "";
     el.dayStartTimeInput.value = day.startTime || "09:00";
+    populateTzSelect(el.dayTzSelect, t("day.tzNone"));
+    el.dayTzSelect.value = day.tz || "";
   }
 
+  /* =========================================================
+   * 時差対応（13）
+   * ========================================================= */
+  // その日の基準日（時差オフセット計算・DST判定に使う）。day.date が無ければ今日を使う
+  function dayBaseDate(day) {
+    if (day && typeof day.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day.date)) {
+      var parts = day.date.split("-").map(function (n) {
+        return parseInt(n, 10);
+      });
+      return new Date(parts[0], parts[1] - 1, parts[2]);
+    }
+    return new Date();
+  }
+
+  // Intl の longOffset 形式（例 "GMT+09:00"）の生テキストを返す。無効な tz は null
+  function tzOffsetRawLabel(tz, baseDate) {
+    if (!tz) return null;
+    try {
+      var dtf = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "longOffset" });
+      var parts = dtf.formatToParts(baseDate || new Date());
+      var part = parts.filter(function (p) {
+        return p.type === "timeZoneName";
+      })[0];
+      return part ? part.value : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // IANAタイムゾーン文字列 -> 分単位のUTCオフセット。無効な tz は try/catch で null（時差なし扱い）
+  function tzOffsetMinutes(tz, baseDate) {
+    var raw = tzOffsetRawLabel(tz, baseDate);
+    if (!raw) return null;
+    if (raw === "GMT") return 0;
+    var m = /^GMT([+-])(\d{2}):(\d{2})$/.exec(raw);
+    if (!m) return null;
+    var sign = m[1] === "-" ? -1 : 1;
+    return sign * (parseInt(m[2], 10) * 60 + parseInt(m[3], 10));
+  }
+
+  // 時差バッジ表示用（例: "-1h" "+9h30m" "+0h"）
+  function tzDiffLabel(diffMinutes) {
+    var sign = diffMinutes < 0 ? "-" : "+";
+    var abs = Math.abs(diffMinutes);
+    var h = Math.floor(abs / 60);
+    var m = abs % 60;
+    return sign + h + "h" + (m ? m + "m" : "");
+  }
+
+  // タイムゾーンセレクトの選択肢一覧。Intl.supportedValuesOf が使える環境ではそれを使い、
+  // 使えない環境向けに主要都市の固定リストにフォールバックする
+  var FALLBACK_TZ_LIST = [
+    "UTC",
+    "Asia/Tokyo", "Asia/Seoul", "Asia/Shanghai", "Asia/Hong_Kong", "Asia/Taipei",
+    "Asia/Singapore", "Asia/Bangkok", "Asia/Manila", "Asia/Jakarta", "Asia/Kuala_Lumpur",
+    "Asia/Kolkata", "Asia/Dubai", "Asia/Ho_Chi_Minh", "Asia/Yangon",
+    "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Rome", "Europe/Madrid", "Europe/Moscow",
+    "Africa/Cairo", "Africa/Johannesburg",
+    "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+    "America/Anchorage", "America/Sao_Paulo", "America/Mexico_City",
+    "Pacific/Auckland", "Pacific/Honolulu", "Pacific/Guam",
+    "Australia/Sydney", "Australia/Perth"
+  ];
+
+  function getTzListForOptions() {
+    var zones = null;
+    if (typeof Intl.supportedValuesOf === "function") {
+      try {
+        zones = Intl.supportedValuesOf("timeZone");
+      } catch (e) {
+        zones = null;
+      }
+    }
+    if (!zones || !zones.length) zones = FALLBACK_TZ_LIST;
+    return zones;
+  }
+
+  // 選択肢DOMは重い（数百件）ため、一度だけ組み立てて使い回す（言語に依存しないのでキャッシュしてよい）
+  var tzOptionsBaseFragment = null;
+  function buildTzOptionsBaseFragment() {
+    var frag = document.createDocumentFragment();
+    var zones = getTzListForOptions();
+    var now = new Date();
+    zones.forEach(function (tz) {
+      var raw = tzOffsetRawLabel(tz, now);
+      var opt = document.createElement("option");
+      opt.value = tz;
+      opt.textContent = tz + (raw ? " (" + raw + ")" : "");
+      frag.appendChild(opt);
+    });
+    return frag;
+  }
+  function getTzOptionsFragmentClone() {
+    if (!tzOptionsBaseFragment) tzOptionsBaseFragment = buildTzOptionsBaseFragment();
+    return tzOptionsBaseFragment.cloneNode(true);
+  }
+
+  // select要素にタイムゾーン選択肢を（先頭に「未設定/時差なし」を挟んで）流し込む
+  function populateTzSelect(select, noneLabel) {
+    select.innerHTML = "";
+    var noneOpt = document.createElement("option");
+    noneOpt.value = "";
+    noneOpt.textContent = noneLabel;
+    select.appendChild(noneOpt);
+    select.appendChild(getTzOptionsFragmentClone());
+  }
+
+  // 現在タイムゾーンを day.tz で初期化し、move の arriveTz を通過するたびに
+  // tzOffsetMinutes(arriveTz) - tzOffsetMinutes(現在tz) をその move の終了時刻以降（自身のendMin含む）に加算する。
+  // day.items との1:1マッピングは崩さない（行程番号・地図・印刷ビューが依存するため）
   function getDayTimedItems(day) {
     var cursor = parseTimeToMinutes(day.startTime || "09:00");
+    var baseDate = dayBaseDate(day);
+    var curTz = typeof day.tz === "string" ? day.tz : "";
+    var pendingLocalNote = false;
     return day.items.map(function (item) {
       var startMin = cursor;
       var endMin = cursor + (item.dur || 0);
+      var localTimeNote = pendingLocalNote;
+      pendingLocalNote = false;
+      var moveTzDiff = null;
+
+      if (item.cat === "move" && item.arriveTz) {
+        var toOffset = tzOffsetMinutes(item.arriveTz, baseDate);
+        if (toOffset != null) {
+          var fromOffset = curTz ? tzOffsetMinutes(curTz, baseDate) : null;
+          var diff = fromOffset != null ? toOffset - fromOffset : 0;
+          moveTzDiff = diff;
+          if (diff !== 0) {
+            endMin += diff;
+            pendingLocalNote = true;
+          }
+          curTz = item.arriveTz;
+        }
+      }
+
       cursor = endMin;
-      return { item: item, startMin: startMin, endMin: endMin };
+      return { item: item, startMin: startMin, endMin: endMin, localTimeNote: localTimeNote, moveTzDiff: moveTzDiff };
     });
   }
 
@@ -765,13 +1586,18 @@
 
     var numMap = getItineraryNumberMap(day);
     getDayTimedItems(day).forEach(function (timed, idx) {
-      el.timeline.appendChild(buildItemCard(timed.item, timed.startMin, timed.endMin, day, idx, numMap));
+      el.timeline.appendChild(buildItemCard(timed.item, timed.startMin, timed.endMin, day, idx, numMap, timed));
     });
   }
 
-  function buildItemCard(item, startMin, endMin, day, idx, numMap) {
+  function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
     var card = document.createElement("div");
-    card.className = "item-card cat-" + item.cat + (item.cat === "move" && item.unresolved ? " item-card-unresolved" : "");
+    card.className =
+      "item-card cat-" +
+      item.cat +
+      (item.cat === "move" && item.unresolved ? " item-card-unresolved" : "") +
+      // 非公開マーク（14）: 項目まるごと非公開のときカードをわずかに沈んだ配色にする
+      (item.priv ? " item-card-private" : "");
     card.dataset.id = item.id;
 
     var handle = document.createElement("div");
@@ -813,6 +1639,13 @@
     var timeText = document.createElement("div");
     timeText.textContent = minutesToTimeStr(startMin) + t("timeline.timeSep") + minutesToTimeStr(endMin);
     timeCol.appendChild(timeText);
+    // 時差対応（13）: 直前の move で tz が切り替わった直後の項目にだけ「(現地時間)」を1回表示する
+    if (timedMeta && timedMeta.localTimeNote) {
+      var localNoteEl = document.createElement("div");
+      localNoteEl.className = "item-local-tz-note";
+      localNoteEl.textContent = t("timeline.localTimeNote");
+      timeCol.appendChild(localNoteEl);
+    }
     card.appendChild(timeCol);
 
     var body = document.createElement("div");
@@ -826,6 +1659,7 @@
     nameInput.className = "item-name";
     nameInput.value = item.name;
     nameInput.placeholder = t("timeline.namePlaceholder");
+    nameInput.readOnly = viewOnly; // 公開URL閲覧（16）: 読み取り専用モードでは編集不可
     nameInput.addEventListener("change", function () {
       var newName = nameInput.value;
       if (newName !== item.name) {
@@ -872,6 +1706,14 @@
     catTag.className = "item-cat-tag cat-" + item.cat;
     catTag.textContent = window.I18N.CAT_NAMES[lang()][item.cat];
     nameRow.appendChild(catTag);
+
+    // 非公開マーク（14）: 項目まるごと非公開のときの淡いバッジ
+    if (item.priv) {
+      var privBadge = document.createElement("span");
+      privBadge.className = "item-priv-badge";
+      privBadge.textContent = "🔒 " + t("timeline.privBadge");
+      nameRow.appendChild(privBadge);
+    }
 
     // 場所を解決できないスポットの近隣アンカー概算バッジ（ツールチップで理由説明）
     if (item.cat === "move" && item.approx) {
@@ -988,7 +1830,31 @@
         saveState();
         render();
       });
+      modeSelect.disabled = viewOnly; // 公開URL閲覧（16）
       metaRow.appendChild(modeSelect);
+
+      // 時差対応（13）: 到着地のタイムゾーン（コンパクトなセレクト）。スペースが厳しいため
+      // 既存の移動手段セレクトの隣に小さく配置する
+      var arriveTzSelect = document.createElement("select");
+      arriveTzSelect.className = "item-arrivetz-select";
+      arriveTzSelect.setAttribute("aria-label", t("timeline.arriveTzLabel"));
+      arriveTzSelect.title = t("timeline.arriveTzLabel");
+      populateTzSelect(arriveTzSelect, t("timeline.arriveTzNone"));
+      arriveTzSelect.value = item.arriveTz || "";
+      arriveTzSelect.addEventListener("change", function () {
+        item.arriveTz = arriveTzSelect.value;
+        saveState();
+        render();
+      });
+      arriveTzSelect.disabled = viewOnly; // 公開URL閲覧（16）
+      metaRow.appendChild(arriveTzSelect);
+
+      if (timedMeta && timedMeta.moveTzDiff != null) {
+        var tzBadge = document.createElement("span");
+        tzBadge.className = "item-tz-badge";
+        tzBadge.textContent = "🕐 " + tzDiffLabel(timedMeta.moveTzDiff);
+        metaRow.appendChild(tzBadge);
+      }
 
       var routeInfo = day ? buildMoveRouteLink(day, idx, item.mode) : null;
       if (routeInfo) {
@@ -1021,6 +1887,7 @@
       saveState();
       render();
     });
+    durInput.readOnly = viewOnly; // 公開URL閲覧（16）
     durWrap.appendChild(durInput);
     var durUnit = document.createElement("span");
     durUnit.className = "item-dur-unit";
@@ -1048,10 +1915,14 @@
       gmapInput.addEventListener("change", function () {
         handleGmapChange(item, gmapInput.value);
       });
+      gmapInput.readOnly = viewOnly; // 公開URL閲覧（16）
       gmapRow.appendChild(gmapInput);
 
       body.appendChild(gmapRow);
     }
+
+    var noteRow = document.createElement("div");
+    noteRow.className = "item-note-row";
 
     var noteInput = document.createElement("textarea");
     noteInput.className = "item-note";
@@ -1062,9 +1933,49 @@
       item.note = noteInput.value;
       saveState();
     });
-    body.appendChild(noteInput);
+    noteInput.readOnly = viewOnly; // 公開URL閲覧（16）
+    noteRow.appendChild(noteInput);
+
+    // 非公開マーク（14）: メモだけを非公開にする小さなトグル
+    var notePrivBtn = document.createElement("button");
+    notePrivBtn.type = "button";
+    notePrivBtn.className = "item-note-priv-toggle" + (item.notePriv ? " active" : "");
+    notePrivBtn.textContent = item.notePriv ? "🔒" : "🔓";
+    notePrivBtn.title = t(item.notePriv ? "timeline.notePrivMarkOff" : "timeline.notePrivMarkOn");
+    notePrivBtn.setAttribute("aria-label", t("timeline.notePrivToggleAria"));
+    notePrivBtn.setAttribute("aria-pressed", item.notePriv ? "true" : "false");
+    notePrivBtn.addEventListener("click", function () {
+      item.notePriv = !item.notePriv;
+      saveState();
+      render();
+    });
+    noteRow.appendChild(notePrivBtn);
+
+    body.appendChild(noteRow);
+
+    if (item.notePriv) {
+      var notePrivHint = document.createElement("div");
+      notePrivHint.className = "item-note-priv-hint";
+      notePrivHint.textContent = t("timeline.notePrivHint");
+      body.appendChild(notePrivHint);
+    }
 
     card.appendChild(body);
+
+    // 非公開マーク（14）: 項目まるごとの 🔓/🔒 トグル（複製・削除ボタンと並べて配置）
+    var privBtn = document.createElement("button");
+    privBtn.type = "button";
+    privBtn.className = "item-priv-toggle" + (item.priv ? " active" : "");
+    privBtn.textContent = item.priv ? "🔒" : "🔓";
+    privBtn.title = t(item.priv ? "timeline.privMarkOff" : "timeline.privMarkOn");
+    privBtn.setAttribute("aria-label", t("timeline.privToggleAria"));
+    privBtn.setAttribute("aria-pressed", item.priv ? "true" : "false");
+    privBtn.addEventListener("click", function () {
+      item.priv = !item.priv;
+      saveState();
+      render();
+    });
+    card.appendChild(privBtn);
 
     var dupBtn = document.createElement("button");
     dupBtn.type = "button";
@@ -1097,12 +2008,182 @@
     Array.prototype.forEach.call(el.addFormCats.querySelectorAll(".cat-btn"), function (btn) {
       btn.classList.toggle("selected", btn.dataset.cat === addFormCat);
     });
+    // 公開URL閲覧（16）: #addForm 自体はCSSで非表示にするが、念のため入力も無効化しておく
+    el.addName.readOnly = viewOnly;
+    el.addDur.readOnly = viewOnly;
+    el.addNote.readOnly = viewOnly;
+    el.addBtn.disabled = viewOnly;
+  }
+
+  /* =========================================================
+   * 持ち物リスト・やることリスト（10・11）
+   * しおり単位（日ごとではない）。kind は "packing" | "todos"。
+   * 準備リストへのクイックアクセス（11）: 同じデータをタイムライン下（"main"）と
+   * 準備モーダル（"prep"）の2箇所に描画できるよう、target 引数で描画先を切り替える。
+   * 描画ロジック自体（buildChecklistRow・renderChecklistSection）は完全に共有し、重複させない
+   * ========================================================= */
+  function checklistArray(kind) {
+    return kind === "packing" ? trip.packing : trip.todos;
+  }
+
+  function checklistEls(kind, target) {
+    var isPrep = target === "prep";
+    if (kind === "packing") {
+      return isPrep
+        ? { items: el.prepPackingItems, empty: el.prepPackingEmptyMsg, progress: el.prepPackingProgress, addInput: el.prepPackingAddInput }
+        : { items: el.packingItems, empty: el.packingEmptyMsg, progress: el.packingProgress, addInput: el.packingAddInput };
+    }
+    return isPrep
+      ? { items: el.prepTodosItems, empty: el.prepTodosEmptyMsg, progress: el.prepTodosProgress, addInput: el.prepTodosAddInput }
+      : { items: el.todosItems, empty: el.todosEmptyMsg, progress: el.todosProgress, addInput: el.todosAddInput };
+  }
+
+  function buildChecklistRow(kind, it) {
+    var row = document.createElement("div");
+    row.className = "checklist-item" + (it.done ? " done" : "") + (it.priv ? " checklist-item-private" : "");
+    row.dataset.id = it.id;
+
+    var checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "checklist-checkbox";
+    checkbox.checked = it.done;
+    checkbox.setAttribute("aria-label", t("checklist.doneAria"));
+    checkbox.addEventListener("change", function () {
+      it.done = checkbox.checked;
+      saveState();
+      renderChecklistSection(kind);
+    });
+    checkbox.disabled = viewOnly; // 公開URL閲覧（16）: チェックボックスも読み取り専用にする
+    row.appendChild(checkbox);
+
+    var textInput = document.createElement("input");
+    textInput.type = "text";
+    textInput.className = "checklist-text-input";
+    textInput.value = it.text;
+    textInput.placeholder = t("checklist.addPlaceholder");
+    textInput.addEventListener("change", function () {
+      it.text = textInput.value;
+      saveState();
+      // モーダル用・タイムライン下用の両方に同じテキストを反映する
+      renderChecklistSection(kind);
+    });
+    textInput.readOnly = viewOnly; // 公開URL閲覧（16）
+    row.appendChild(textInput);
+
+    // 非公開マーク（14）: 持ち物・やること各行の 🔓/🔒 トグル
+    var privBtn = document.createElement("button");
+    privBtn.type = "button";
+    privBtn.className = "checklist-priv-toggle" + (it.priv ? " active" : "");
+    privBtn.textContent = it.priv ? "🔒" : "🔓";
+    privBtn.title = t(it.priv ? "checklist.privMarkOff" : "checklist.privMarkOn");
+    privBtn.setAttribute("aria-label", t("checklist.privToggleAria"));
+    privBtn.setAttribute("aria-pressed", it.priv ? "true" : "false");
+    privBtn.addEventListener("click", function () {
+      it.priv = !it.priv;
+      saveState();
+      renderChecklistSection(kind);
+    });
+    row.appendChild(privBtn);
+
+    var delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "checklist-delete";
+    delBtn.textContent = "🗑";
+    delBtn.setAttribute("aria-label", t("timeline.deleteItem"));
+    delBtn.addEventListener("click", function () {
+      deleteChecklistItem(kind, it.id);
+    });
+    row.appendChild(delBtn);
+
+    return row;
+  }
+
+  // 未完了件数の合計（persisting/todos）をヘッダーの🧳バッジに反映する
+  function updatePrepBadge() {
+    if (!el.prepBadge) return;
+    var incomplete =
+      trip.packing.filter(function (it) {
+        return !it.done;
+      }).length +
+      trip.todos.filter(function (it) {
+        return !it.done;
+      }).length;
+    if (incomplete > 0) {
+      el.prepBadge.textContent = incomplete > 99 ? "99+" : String(incomplete);
+      el.prepBadge.classList.remove("hidden");
+    } else {
+      el.prepBadge.classList.add("hidden");
+    }
+  }
+
+  // kind の一覧を "main"（タイムライン下）・"prep"（準備モーダル）の両方に再描画する
+  function renderChecklistSection(kind) {
+    var list = checklistArray(kind);
+    var doneCount = list.filter(function (it) {
+      return it.done;
+    }).length;
+
+    ["main", "prep"].forEach(function (target) {
+      var els = checklistEls(kind, target);
+      if (!els.items) return;
+      els.items.innerHTML = "";
+      if (!list.length) {
+        els.empty.classList.remove("hidden");
+      } else {
+        els.empty.classList.add("hidden");
+      }
+      els.progress.textContent = doneCount + "/" + list.length;
+      list.forEach(function (it) {
+        els.items.appendChild(buildChecklistRow(kind, it));
+      });
+    });
+
+    updatePrepBadge();
+  }
+
+  function renderChecklists() {
+    renderChecklistSection("packing");
+    renderChecklistSection("todos");
+  }
+
+  // target: "main"（タイムライン下の追加欄） | "prep"（準備モーダルの追加欄）
+  function addChecklistItem(kind, target) {
+    if (viewOnly) return;
+    var els = checklistEls(kind, target);
+    var text = els.addInput.value.trim();
+    if (!text) {
+      els.addInput.focus();
+      return;
+    }
+    checklistArray(kind).push({ id: genId(), text: text, done: false, priv: false });
+    els.addInput.value = "";
+    saveState();
+    renderChecklistSection(kind);
+    els.addInput.focus();
+  }
+
+  function deleteChecklistItem(kind, id) {
+    if (viewOnly) return;
+    var list = checklistArray(kind);
+    var idx = list.findIndex(function (it) {
+      return it.id === id;
+    });
+    if (idx === -1) return;
+    list.splice(idx, 1);
+    saveState();
+    renderChecklistSection(kind);
+  }
+
+  function openPrepModal() {
+    renderChecklists();
+    openModal(el.prepModal);
   }
 
   /* =========================================================
    * 項目 CRUD
    * ========================================================= */
   function deleteItem(id) {
+    if (viewOnly) return;
     var day = trip.days[currentDayIndex];
     day.items = day.items.filter(function (it) {
       return it.id !== id;
@@ -1113,6 +2194,7 @@
 
   // カードの完全コピー（idのみ新規発行）を直後に挿入する（move も複製可）
   function duplicateItem(id) {
+    if (viewOnly) return;
     var day = trip.days[currentDayIndex];
     var idx = day.items.findIndex(function (it) {
       return it.id === id;
@@ -1126,6 +2208,7 @@
   }
 
   function addItemFromForm() {
+    if (viewOnly) return;
     var name = el.addName.value.trim();
     if (!name) {
       showToast(t("toast.nameRequired"), "error");
@@ -1141,6 +2224,8 @@
       loc: "",
       dur: dur,
       note: note,
+      priv: false,
+      notePriv: false,
       lat: null,
       lon: null,
       coordSrc: null
@@ -1149,6 +2234,7 @@
       item.mode = "train";
       item.distKm = null;
       item.auto = false;
+      item.arriveTz = "";
     } else {
       item.gmap = "";
       item.gmapAuto = false;
@@ -1166,6 +2252,7 @@
    * 日タブ操作
    * ========================================================= */
   function requestDeleteDay(idx) {
+    if (viewOnly) return;
     if (trip.days.length <= 1) {
       showToast(t("day.cannotDeleteLast"), "error");
       return;
@@ -1186,6 +2273,7 @@
    * ドラッグ&ドロップ（Pointer Events）
    * ========================================================= */
   function onDragHandlePointerDown(e) {
+    if (viewOnly) return;
     var handle = e.target.closest(".drag-handle");
     if (!handle) return;
     var card = handle.closest(".item-card");
@@ -2100,7 +3188,7 @@
   }
 
   function runRouteCalculation(dayIndex) {
-    if (isGeoRunning) return;
+    if (viewOnly || isGeoRunning) return;
     // スポット名の多言語表示（3c）とはフラグ・レート制限を共用するため、
     // name-fetch が実行中なら安全に中断してからルート検討を開始する
     abortNameFetch();
@@ -2155,13 +3243,16 @@
           loc: "",
           dur: dur,
           note: "",
+          priv: false,
+          notePriv: false,
           lat: null,
           lon: null,
           mode: mode,
           distKm: distKm,
           auto: true,
           approx: !!approx,
-          unresolved: !!unresolved
+          unresolved: !!unresolved,
+          arriveTz: ""
         }
       });
     }
@@ -2342,7 +3433,7 @@
    * 地図更新ボタン（座標未取得の滞在地をまとめてジオコーディング）
    * ========================================================= */
   function runMapUpdate() {
-    if (isGeoRunning) return;
+    if (viewOnly || isGeoRunning) return;
     // スポット名の多言語表示（3c）とはフラグ・レート制限を共用するため、
     // name-fetch が実行中なら安全に中断してから地図更新を開始する
     abortNameFetch();
@@ -2560,56 +3651,126 @@
   }
 
   /* =========================================================
-   * 複数しおりの管理（9）
+   * 複数しおりの管理（9・11: しおりのアーカイブ）
    * ========================================================= */
-  function renderTripsList() {
-    el.tripsList.innerHTML = "";
-    tripsStore.forEach(function (entry) {
-      var isActive = entry.id === currentTripId;
-      var item = document.createElement("div");
-      item.className = "trip-list-item" + (isActive ? " active" : "");
-      item.dataset.id = entry.id;
+  // 一覧行（アクティブ一覧・アーカイブ済み一覧の両方で共用）を1件分組み立てる
+  function buildTripListRow(entry) {
+    var isActive = entry.id === currentTripId;
+    var item = document.createElement("div");
+    item.className = "trip-list-item" + (isActive ? " active" : "") + (entry.archived ? " archived" : "");
+    item.dataset.id = entry.id;
 
-      var info = document.createElement("div");
-      info.className = "trip-list-item-info";
+    var info = document.createElement("div");
+    info.className = "trip-list-item-info";
 
-      var titleEl = document.createElement("div");
-      titleEl.className = "trip-list-item-title";
-      titleEl.textContent = tripDisplayTitle(entry.data) || t("trips.untitled");
-      info.appendChild(titleEl);
+    var titleEl = document.createElement("div");
+    titleEl.className = "trip-list-item-title";
+    titleEl.textContent = tripDisplayTitle(entry.data) || t("trips.untitled");
+    info.appendChild(titleEl);
 
-      var metaEl = document.createElement("div");
-      metaEl.className = "trip-list-item-meta";
-      metaEl.textContent = t("trips.dayCount", { n: entry.data.days.length });
-      info.appendChild(metaEl);
+    var metaEl = document.createElement("div");
+    metaEl.className = "trip-list-item-meta";
+    metaEl.textContent = t("trips.dayCount", { n: entry.data.days.length });
+    info.appendChild(metaEl);
 
-      item.appendChild(info);
+    item.appendChild(info);
 
-      if (isActive) {
-        var badge = document.createElement("span");
-        badge.className = "trip-list-item-badge";
-        badge.textContent = t("trips.currentBadge");
-        item.appendChild(badge);
-      }
+    if (isActive) {
+      var badge = document.createElement("span");
+      badge.className = "trip-list-item-badge";
+      badge.textContent = t("trips.currentBadge");
+      item.appendChild(badge);
+    }
 
-      var delBtn = document.createElement("button");
-      delBtn.type = "button";
-      delBtn.className = "trip-list-item-delete";
-      delBtn.textContent = "🗑";
-      delBtn.setAttribute("aria-label", t("trips.deleteAria"));
-      delBtn.dataset.id = entry.id;
-      item.appendChild(delBtn);
+    // Google ログイン＋Firestore クラウド保存（15）: クラウド同期済みのしおりに控えめな雲アイコンを表示する
+    if (entry.cloudId) {
+      var cloudBadge = document.createElement("span");
+      cloudBadge.className = "trip-list-item-cloud";
+      cloudBadge.textContent = "☁";
+      cloudBadge.title = t("trips.cloudSynced");
+      cloudBadge.setAttribute("aria-label", t("trips.cloudSynced"));
+      item.appendChild(cloudBadge);
+    }
 
-      el.tripsList.appendChild(item);
+    // 公開層と公開URL（16）: 公開中のしおりに🌐バッジを表示する
+    if (entry.publicId) {
+      var publicBadge = document.createElement("span");
+      publicBadge.className = "trip-list-item-public";
+      publicBadge.textContent = "🌐";
+      publicBadge.title = t("share.publicBadge");
+      publicBadge.setAttribute("aria-label", t("share.publicBadge"));
+      item.appendChild(publicBadge);
+    }
+
+    var archiveBtn = document.createElement("button");
+    archiveBtn.type = "button";
+    archiveBtn.className = "trip-list-item-archive";
+    archiveBtn.textContent = entry.archived ? "↩" : "📦";
+    archiveBtn.setAttribute("aria-label", t(entry.archived ? "trips.unarchiveAria" : "trips.archiveAria"));
+    archiveBtn.title = t(entry.archived ? "trips.unarchiveAria" : "trips.archiveAria");
+    archiveBtn.dataset.id = entry.id;
+    archiveBtn.dataset.action = entry.archived ? "unarchive" : "archive";
+    item.appendChild(archiveBtn);
+
+    var delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "trip-list-item-delete";
+    delBtn.textContent = "🗑";
+    delBtn.setAttribute("aria-label", t("trips.deleteAria"));
+    delBtn.dataset.id = entry.id;
+    item.appendChild(delBtn);
+
+    return item;
+  }
+
+  function renderTripListInto(container, list) {
+    container.innerHTML = "";
+    list.forEach(function (entry) {
+      container.appendChild(buildTripListRow(entry));
     });
   }
 
+  // しおり一覧モーダル: 通常はアーカイブされていないしおりのみを表示し、
+  // 「アーカイブ済みを見る（n）」トグルONのときだけアーカイブ済み一覧を表示する
+  function renderTripsList() {
+    var activeTrips = tripsStore.filter(function (e) {
+      return !e.archived;
+    });
+    var archivedTrips = tripsStore.filter(function (e) {
+      return e.archived;
+    });
+
+    renderTripListInto(el.tripsList, activeTrips);
+
+    if (archivedTrips.length > 0) {
+      el.tripsArchiveToggleBtn.classList.remove("hidden");
+      el.tripsArchiveToggleLabel.textContent = t("trips.showArchived", { n: archivedTrips.length });
+      el.tripsArchiveToggleBtn.setAttribute("aria-expanded", tripsArchivedOpen ? "true" : "false");
+    } else {
+      el.tripsArchiveToggleBtn.classList.add("hidden");
+      tripsArchivedOpen = false;
+    }
+
+    if (tripsArchivedOpen && archivedTrips.length > 0) {
+      el.tripsArchivedList.classList.remove("hidden");
+      renderTripListInto(el.tripsArchivedList, archivedTrips);
+    } else {
+      el.tripsArchivedList.classList.add("hidden");
+      el.tripsArchivedList.innerHTML = "";
+    }
+  }
+
   function openTripsModal() {
+    // 公開URL閲覧（16）: しおり一覧はローカルの自分のしおりを扱うため、閲覧モード中は開かない
+    // （ヘッダーの tripsBtn 自体も非表示にしているが、念のための二重ガード）
+    if (viewOnly) return;
+    tripsArchivedOpen = false;
     renderTripsList();
     openModal(el.tripsModal);
   }
 
   function switchTrip(id) {
+    if (viewOnly) return;
     if (id === currentTripId) {
       closeModal(el.tripsModal);
       return;
@@ -2627,9 +3788,10 @@
   }
 
   function createNewTrip() {
+    if (viewOnly) return;
     var data = normalizeTrip(createBlankTripData());
     var id = genId();
-    tripsStore.push({ id: id, data: data });
+    tripsStore.push({ id: id, data: data, archived: false, cloudId: null, updatedAt: Date.now(), publicId: null });
     currentTripId = id;
     trip = data;
     currentDayIndex = 0;
@@ -2638,15 +3800,20 @@
     render();
   }
 
+  // 「アーカイブされていないしおりが1つだけのとき、そのしおりは削除不可」（11で「最後の1つは削除不可」ガードを整合）
   function requestDeleteTrip(id) {
-    if (tripsStore.length <= 1) {
-      showToast(t("trips.cannotDeleteLast"), "error");
-      return;
-    }
+    if (viewOnly) return;
     var entry = tripsStore.find(function (e) {
       return e.id === id;
     });
     if (!entry) return;
+    var activeCount = tripsStore.filter(function (e) {
+      return !e.archived;
+    }).length;
+    if (!entry.archived && activeCount <= 1) {
+      showToast(t("trips.cannotDeleteLast"), "error");
+      return;
+    }
     var title = tripDisplayTitle(entry.data) || t("trips.untitled");
     showConfirm(t("trips.deleteConfirmTitle"), t("trips.deleteConfirmBody", { title: title }), function () {
       var idx = tripsStore.findIndex(function (e) {
@@ -2654,8 +3821,14 @@
       });
       if (idx === -1) return;
       tripsStore.splice(idx, 1);
+      // Google ログイン＋Firestore クラウド保存（15）: クラウド同期済みなら文書も削除する
+      cloudDeleteEntry(entry);
       if (currentTripId === id) {
-        var nextEntry = tripsStore[Math.min(idx, tripsStore.length - 1)];
+        // アーカイブされていないしおりを優先して切り替え先にする
+        var nextEntry =
+          tripsStore.find(function (e) {
+            return !e.archived;
+          }) || tripsStore[0];
         currentTripId = nextEntry.id;
         trip = nextEntry.data;
         currentDayIndex = 0;
@@ -2664,6 +3837,79 @@
       render();
       if (!el.tripsModal.classList.contains("hidden")) renderTripsList();
     });
+  }
+
+  // しおりのアーカイブ（11）: 確認ダイアログ不要。現在編集中のしおりをアーカイブする場合は
+  // アーカイブされていない他のしおりへ自動的に切り替える。他に無ければアーカイブ不可
+  function requestArchiveTrip(id) {
+    if (viewOnly) return;
+    var entry = tripsStore.find(function (e) {
+      return e.id === id;
+    });
+    if (!entry || entry.archived) return;
+
+    if (id === currentTripId) {
+      var nextEntry = tripsStore.find(function (e) {
+        return e.id !== id && !e.archived;
+      });
+      if (!nextEntry) {
+        showToast(t("trips.cannotArchiveLast"), "error");
+        return;
+      }
+      entry.archived = true;
+      currentTripId = nextEntry.id;
+      trip = nextEntry.data;
+      currentDayIndex = 0;
+      saveState();
+      // Google ログイン＋Firestore クラウド保存（15）: saveState() は現在（切替後）のしおりしか
+      // クラウド同期の対象にしないため、アーカイブしたしおり自体は明示的に反映する
+      cloudUpsertEntry(entry);
+      render();
+      renderTripsList();
+      showToast(t("trips.archived"));
+      return;
+    }
+
+    entry.archived = true;
+    saveState();
+    cloudUpsertEntry(entry);
+    renderTripsList();
+    showToast(t("trips.archived"));
+  }
+
+  function unarchiveTrip(id) {
+    if (viewOnly) return;
+    var entry = tripsStore.find(function (e) {
+      return e.id === id;
+    });
+    if (!entry || !entry.archived) return;
+    entry.archived = false;
+    saveState();
+    cloudUpsertEntry(entry);
+    renderTripsList();
+    showToast(t("trips.unarchived"));
+  }
+
+  // しおり一覧・アーカイブ済み一覧の両方で共用するクリックハンドラ
+  function onTripsListClick(e) {
+    var archiveBtn = e.target.closest(".trip-list-item-archive");
+    if (archiveBtn) {
+      e.stopPropagation();
+      if (archiveBtn.dataset.action === "unarchive") {
+        unarchiveTrip(archiveBtn.dataset.id);
+      } else {
+        requestArchiveTrip(archiveBtn.dataset.id);
+      }
+      return;
+    }
+    var delBtn = e.target.closest(".trip-list-item-delete");
+    if (delBtn) {
+      e.stopPropagation();
+      requestDeleteTrip(delBtn.dataset.id);
+      return;
+    }
+    var row = e.target.closest(".trip-list-item");
+    if (row) switchTrip(row.dataset.id);
   }
 
   /* =========================================================
@@ -2694,11 +3940,89 @@
   }
 
   function openShareModal() {
-    var json = JSON.stringify(trip);
+    if (viewOnly) return;
+    // 非公開マークと公開用データ（14）: 共有リンクに埋め込むのは trip 全体そのままではなく、
+    // sanitizeTripForPublic の結果（priv/notePriv を反映した公開コピー）にする。
+    // これにより非公開マークを付けた部分は共有リンクを渡しても見えなくなる
+    var publicData = sanitizeTripForPublic(trip);
+    var json = JSON.stringify(publicData);
     var encoded = toBase64Url(json);
     var url = window.location.origin + window.location.pathname + "#d=" + encoded;
     el.shareUrl.value = url;
+    renderShareModalPublicSection();
     openModal(el.shareModal);
+  }
+
+  // 公開層と公開URL（16）: 共有モーダルの「🌐 公開する」セクションを、現在の authUser / publicId に合わせて更新する。
+  // 未ログイン時は「ログインすると短い公開リンクを発行できます」の案内のみ表示する
+  function renderShareModalPublicSection() {
+    if (!el.sharePublicSection) return;
+    if (!authUser || !firebaseReady) {
+      el.sharePublicSection.classList.add("hidden");
+      if (el.shareLoginHint) el.shareLoginHint.classList.remove("hidden");
+      return;
+    }
+    if (el.shareLoginHint) el.shareLoginHint.classList.add("hidden");
+    el.sharePublicSection.classList.remove("hidden");
+
+    var entry = getCurrentEntry();
+    var isPublished = !!(entry && entry.publicId);
+    el.sharePublicToggle.checked = isPublished;
+    el.sharePublicBadge.classList.toggle("hidden", !isPublished);
+    el.sharePublicUrlWrap.classList.toggle("hidden", !isPublished);
+
+    if (isPublished) {
+      var url = window.location.origin + window.location.pathname + "#p=" + encodeURIComponent(entry.publicId);
+      el.sharePublicUrl.value = url;
+      var sanitized = sanitizeTripForPublic(entry.data);
+      var excluded = countSanitizedExclusions(entry.data, sanitized);
+      el.sharePublicExcluded.textContent =
+        excluded > 0 ? t("publicPreview.excludedCount", { n: excluded }) : t("publicPreview.noneExcluded");
+      el.sharePublicExcluded.classList.remove("hidden");
+    } else {
+      el.sharePublicExcluded.classList.add("hidden");
+    }
+  }
+
+  // 共有モーダルの「🌐 公開する」トグル操作。二重送信防止のため通信中はトグルを一時的に無効化する
+  function onSharePublicToggleChange() {
+    if (viewOnly || !authUser || !firebaseReady) return;
+    var wantOn = el.sharePublicToggle.checked;
+    el.sharePublicToggle.disabled = true;
+    var onDone = function () {
+      el.sharePublicToggle.disabled = false;
+      renderShareModalPublicSection();
+      if (el.tripsModal && !el.tripsModal.classList.contains("hidden")) renderTripsList();
+    };
+    if (wantOn) {
+      publishCurrentTrip(onDone);
+    } else {
+      unpublishCurrentTrip(onDone);
+    }
+  }
+
+  // 非公開マークと公開用データ（14）: 「公開時の見え方を確認」ボタン。
+  // sanitizeTripForPublic の結果を、印刷ビュー（12）と同じ組み立て関数
+  // （buildPrintDaySection / buildPrintItemRow / buildPrintChecklistSection）を流用して
+  // 読み取り専用のテキスト一覧として表示する（textContentベースでDOMを組み立てるため XSS対策は既存のまま）
+  function openPublicPreviewModal() {
+    var publicData = sanitizeTripForPublic(trip);
+    var excluded = countSanitizedExclusions(trip, publicData);
+
+    el.publicPreviewExcluded.textContent =
+      excluded > 0 ? t("publicPreview.excludedCount", { n: excluded }) : t("publicPreview.noneExcluded");
+
+    el.publicPreviewContent.innerHTML = "";
+    publicData.days.forEach(function (day, idx) {
+      el.publicPreviewContent.appendChild(buildPrintDaySection(day, idx));
+    });
+    var checklistsWrap = document.createElement("div");
+    checklistsWrap.className = "print-checklists";
+    checklistsWrap.appendChild(buildPrintChecklistSection("checklist.packingTitle", publicData.packing));
+    checklistsWrap.appendChild(buildPrintChecklistSection("checklist.todosTitle", publicData.todos));
+    el.publicPreviewContent.appendChild(checklistsWrap);
+
+    openModal(el.publicPreviewModal);
   }
 
   function checkSharedHash() {
@@ -2724,9 +4048,10 @@
 
     showConfirm(t("share.loadSharedTitle"), t("share.loadSharedBody"), function () {
       // 複数しおりの管理（9）: 共有リンクは上書きではなく新しいしおりとして追加して切り替える
+      // しおりのアーカイブ（11）: 共有リンクで追加されるしおりは archived: false
       var data = normalizeTrip(parsed);
       var id = genId();
-      tripsStore.push({ id: id, data: data });
+      tripsStore.push({ id: id, data: data, archived: false, cloudId: null, updatedAt: 0, publicId: null });
       currentTripId = id;
       trip = data;
       currentDayIndex = 0;
@@ -2736,12 +4061,91 @@
   }
 
   /* =========================================================
+   * 公開層と公開URL（16）: #p=<publicId> の読み取り専用閲覧
+   * ========================================================= */
+
+  // #p=<publicId> があれば読み取り専用モードで起動する。ログイン不要・localStorageは一切変更しない。
+  // ハッシュを検出した時点で同期的に viewOnly=true にすることで、この後に呼ばれる init() 末尾の
+  // saveState() を含め、以降の保存処理を確実に無効化してからFirestoreへの非同期取得を行う
+  function checkPublicHash() {
+    var hash = window.location.hash;
+    if (!hash || hash.indexOf("#p=") !== 0) return;
+    var publicId = decodeURIComponent(hash.slice(3));
+    if (!publicId) return;
+
+    viewOnly = true;
+    render();
+
+    if (!firebaseReady || !fbDb) {
+      finishPublicHashFallback();
+      return;
+    }
+
+    fbDb
+      .collection(CLOUD_PUBLIC_TRIPS_COLLECTION)
+      .doc(publicId)
+      .get()
+      .then(function (doc) {
+        if (!doc || !doc.exists) {
+          finishPublicHashFallback();
+          return;
+        }
+        var d = doc.data() || {};
+        var parsed = safeParseTripJSON(d.data);
+        if (!parsed || !Array.isArray(parsed.days)) {
+          finishPublicHashFallback();
+          return;
+        }
+        trip = normalizeTrip(parsed);
+        currentDayIndex = 0;
+        render();
+      })
+      .catch(function () {
+        finishPublicHashFallback();
+      });
+  }
+
+  // 公開URLの取得に失敗した（存在しない・削除済み・オフライン等）場合のフォールバック。
+  // 通常モードで起動し直す。ハッシュを消して再読み込み時の再取得ループを防ぐ
+  function finishPublicHashFallback() {
+    viewOnly = false;
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+    showToast(t("viewOnly.notFound"), "error");
+    render();
+    // init() 末尾の saveState() は viewOnly=true の間スキップされているため、
+    // 起動時の移行・正規化結果の永続化をここで肩代わりする
+    saveState();
+  }
+
+  // ヘッダーの「自分のしおりに戻る」ボタン。viewOnly を解除し、ローカルの現在のしおりの表示に戻す
+  function exitViewOnlyMode() {
+    if (!viewOnly) return;
+    viewOnly = false;
+    trip = getCurrentEntry().data;
+    currentDayIndex = 0;
+    if (window.location.hash) {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+    render();
+  }
+
+  /* =========================================================
    * CSV 入出力（SPEC 8）
    * ヘッダー行固定: day,date,start,category,mode,name,minutes,note,gmap
    * RFC4180 準拠の引用符処理（, " 改行を含むフィールドは "..." で囲み、" は "" にエスケープ）を
    * 出力・パース両方で行う。単純な split(",") は使わない
    * ========================================================= */
   var CSV_COLUMNS = ["day", "date", "start", "category", "mode", "name", "minutes", "note", "gmap"];
+  // 時差対応（13）: tz（day列と同じく行ごと）・arriveTz（move行のみ）は任意列。
+  // 非公開マークと公開用データ（14）: private・notePrivate（1/0）も同様の任意列として追加する。
+  // 旧CSV（これらの列が無い）を読み込んでもエラーにならず空/false扱いにする後方互換のため、
+  // CSV_COLUMNS（必須列）には含めず、別枠の任意列として扱う。
+  // CSVエクスポートは自分用の完全バックアップのため、非公開項目も含めた完全データを出力する（サニタイズ対象外）
+  var CSV_OPTIONAL_COLUMNS = ["tz", "arriveTz", "private", "notePrivate"];
+  // 持ち物リスト・やることリスト（10）: 行程CSVの後に空行を1行挟んだ第2テーブルのヘッダー（必須列）
+  var CHECKLIST_CSV_COLUMNS = ["list", "text", "done"];
+  // 非公開マークと公開用データ（14）: 第2テーブルの任意列（旧CSVには無いため false 扱いで後方互換）
+  var CHECKLIST_CSV_OPTIONAL_COLUMNS = ["private"];
 
   // RFC4180: フィールドに , " 改行のいずれかを含む場合のみ "..." で囲み、内部の " は "" にエスケープする
   function csvEscapeField(value) {
@@ -2827,7 +4231,7 @@
 
   function exportTripCsv() {
     var L = lang();
-    var rows = [CSV_COLUMNS.slice()];
+    var rows = [CSV_COLUMNS.concat(CSV_OPTIONAL_COLUMNS)];
     trip.days.forEach(function (day, dayIdx) {
       var dayNum = dayIdx + 1;
       day.items.forEach(function (item) {
@@ -2843,11 +4247,29 @@
           item.name || "",
           String(item.dur || 0),
           item.note || "",
-          gmapVal
+          gmapVal,
+          day.tz || "",
+          item.cat === "move" ? item.arriveTz || "" : "",
+          item.priv ? "1" : "0",
+          item.notePriv ? "1" : "0"
         ]);
       });
     });
-    return rows.map(csvFormatRow).join("\r\n") + "\r\n";
+    var mainCsv = rows.map(csvFormatRow).join("\r\n") + "\r\n";
+
+    // 持ち物リスト・やることリスト（10）: 行程CSVの後に空行を1行挟み、第2テーブルとして出力する。
+    // 非公開マークと公開用データ（14）: private（1/0）列を追加する
+    var listRows = [CHECKLIST_CSV_COLUMNS.concat(CHECKLIST_CSV_OPTIONAL_COLUMNS)];
+    var listLabels = window.I18N.LIST_NAMES[L];
+    trip.packing.forEach(function (it) {
+      listRows.push([listLabels.packing, it.text || "", it.done ? "1" : "0", it.priv ? "1" : "0"]);
+    });
+    trip.todos.forEach(function (it) {
+      listRows.push([listLabels.todos, it.text || "", it.done ? "1" : "0", it.priv ? "1" : "0"]);
+    });
+    var listCsv = listRows.map(csvFormatRow).join("\r\n") + "\r\n";
+
+    return mainCsv + "\r\n" + listCsv;
   }
 
   // ファイル名として不正な文字を無難な文字に置き換える
@@ -2880,6 +4302,15 @@
     reader.readAsText(file);
   }
 
+  // 非公開マークと公開用データ（14）: CSVの 1/0（true/false も許容）の任意列を boolean に変換する。
+  // 列が無い（colIndex[key] が undefined）旧CSVでは false を返す（後方互換）
+  function csvBoolField(fields, colIndex, key) {
+    var idx = colIndex[key];
+    if (idx == null) return false;
+    var v = (fields[idx] || "").trim().toLowerCase();
+    return v === "1" || v === "true";
+  }
+
   // 1行分のCSVレコード(フィールド配列)を item に変換する。パースできない場合は null を返す
   function parseCsvItemRow(fields, colIndex) {
     var catWord = fields[colIndex.category];
@@ -2903,6 +4334,9 @@
       loc: "",
       dur: dur,
       note: note,
+      // 非公開マークと公開用データ（14）: private・notePrivate は任意列。旧CSVでは false 扱い
+      priv: csvBoolField(fields, colIndex, "private"),
+      notePriv: csvBoolField(fields, colIndex, "notePrivate"),
       lat: null,
       lon: null,
       coordSrc: null
@@ -2912,6 +4346,9 @@
       item.mode = window.I18N.resolveMode(modeWord) || "other";
       item.distKm = null;
       item.auto = false;
+      // 時差対応（13）: arriveTz は任意列。旧CSV（列が無い）では colIndex.arriveTz が undefined になり、
+      // fields[undefined] は undefined になるので "" にフォールバックする（後方互換）
+      item.arriveTz = (colIndex.arriveTz != null ? fields[colIndex.arriveTz] : "") || "";
     } else {
       item.gmap = gmap;
       item.names = {};
@@ -2927,10 +4364,34 @@
     return item;
   }
 
+  // 持ち物リスト・やることリスト（10）: 第2テーブルの行 [list, text, done] を解析する。
+  // list 列は現在言語に限らず4言語いずれの表記も受け付ける（resolveListKind）
+  function parseChecklistItemRow(fields, colIndex) {
+    var kind = window.I18N.resolveListKind(fields[colIndex.list]);
+    if (!kind) return null;
+    var text = (fields[colIndex.text] || "").trim();
+    if (!text) return null;
+    var doneVal = (fields[colIndex.done] || "").trim().toLowerCase();
+    var done = doneVal === "1" || doneVal === "true";
+    // 非公開マークと公開用データ（14）: private は任意列。旧CSVでは false 扱い
+    var priv = csvBoolField(fields, colIndex, "private");
+    return { kind: kind, item: { id: genId(), text: text, done: done, priv: priv } };
+  }
+
   function parseTripCsv(text) {
     var rows = parseCsvRows(text);
     var warnings = [];
-    var newTrip = { v: 1, title: trip.title, titles: Object.assign({}, trip.titles), lang: trip.lang, days: [] };
+    // 持ち物リスト・やることリスト（10）: 第2テーブルが無いCSV（旧形式）を読み込んだ場合に備え、
+    // 既存の packing/todos をデフォルトとして引き継ぐ（後方互換）。第2テーブルが見つかれば置換する
+    var newTrip = {
+      v: 1,
+      title: trip.title,
+      titles: Object.assign({}, trip.titles),
+      lang: trip.lang,
+      days: [],
+      packing: JSON.parse(JSON.stringify(trip.packing)),
+      todos: JSON.parse(JSON.stringify(trip.todos))
+    };
 
     if (rows.length === 0) {
       newTrip.days.push({ date: "", startTime: "09:00", items: [] });
@@ -2960,10 +4421,21 @@
       })
     );
 
+    // 持ち物リスト・やることリスト（10）: 行程CSVの後の最初の空行（フィールド1つで空文字の行）で
+    // 第2テーブルと区切る。空行が無ければ第2テーブル無し（従来どおり）
+    var blankIdx = -1;
+    for (var bi = 1; bi < rows.length; bi++) {
+      if (rows[bi].length === 1 && rows[bi][0].trim() === "") {
+        blankIdx = bi;
+        break;
+      }
+    }
+    var mainEnd = blankIdx === -1 ? rows.length : blankIdx;
+
     var dayMap = {};
     var dayOrder = [];
 
-    for (var i = 1; i < rows.length; i++) {
+    for (var i = 1; i < mainEnd; i++) {
       var lineNo = i + 1;
       var fields = rows[i];
 
@@ -2991,6 +4463,8 @@
         dayMap[dayNum] = {
           date: fields[colIndex.date] || "",
           startTime: fields[colIndex.start] || "09:00",
+          // 時差対応（13）: tz は任意列。旧CSV（列が無い）では colIndex.tz が undefined になり "" にフォールバックする
+          tz: (colIndex.tz != null ? fields[colIndex.tz] : "") || "",
           items: []
         };
         dayOrder.push(dayNum);
@@ -3005,10 +4479,62 @@
       newTrip.days.push({ date: "", startTime: "09:00", items: [] });
     }
 
+    // 持ち物リスト・やることリスト（10）: 第2テーブルが見つかり、ヘッダーが list,text,done を
+    // 満たしていれば packing/todos を置換する。見つからなければ冒頭で引き継いだ既存値を維持する
+    if (blankIdx !== -1 && blankIdx + 1 < rows.length) {
+      var listHeader = rows[blankIdx + 1].map(function (h) {
+        return (h || "").trim();
+      });
+      var listColIndex = {};
+      listHeader.forEach(function (name, idx) {
+        listColIndex[name] = idx;
+      });
+      var listMissing = CHECKLIST_CSV_COLUMNS.some(function (c) {
+        return !Object.prototype.hasOwnProperty.call(listColIndex, c);
+      });
+
+      if (!listMissing) {
+        var listMaxColIdx = Math.max.apply(
+          null,
+          CHECKLIST_CSV_COLUMNS.map(function (c) {
+            return listColIndex[c];
+          })
+        );
+        var newPacking = [];
+        var newTodos = [];
+        for (var j = blankIdx + 2; j < rows.length; j++) {
+          var listLineNo = j + 1;
+          var listFields = rows[j];
+
+          if (listFields.length === 1 && listFields[0].trim() === "") continue;
+
+          if (listFields.length <= listMaxColIdx) {
+            warnings.push(listLineNo);
+            continue;
+          }
+
+          var parsed = parseChecklistItemRow(listFields, listColIndex);
+          if (!parsed) {
+            warnings.push(listLineNo);
+            continue;
+          }
+
+          if (parsed.kind === "packing") {
+            newPacking.push(parsed.item);
+          } else {
+            newTodos.push(parsed.item);
+          }
+        }
+        newTrip.packing = newPacking;
+        newTrip.todos = newTodos;
+      }
+    }
+
     return { trip: normalizeTrip(newTrip), warnings: warnings };
   }
 
   function applyTextImport(text) {
+    if (viewOnly) return;
     var result = parseTripCsv(text);
     trip = result.trip;
     // 複数しおりの管理（9）: trip は新しいオブジェクトに差し替わるため、
@@ -3026,6 +4552,175 @@
   function openTextioModal() {
     el.textioArea.value = exportTripCsv();
     openModal(el.textioModal);
+  }
+
+  /* =========================================================
+   * PDF出力（印刷 12）
+   * 外部ライブラリ不使用のため「印刷用ビュー + window.print()」（ブラウザの「PDFとして保存」）で実現する。
+   * #printView は input/select/button を一切使わず textContent ベースの静的要素のみで組み立てる
+   * （入力欄の枠線が印刷に出るのを避けるため）。地図はLeafletタイル印刷が不安定なため含めない。
+   * ========================================================= */
+  function printDateRangeText() {
+    var dates = trip.days
+      .map(function (d) {
+        return d.date;
+      })
+      .filter(Boolean);
+    if (dates.length === 0) return "";
+    var first = dates[0];
+    var last = dates[dates.length - 1];
+    if (first === last) return first;
+    return first + " " + t("timeline.timeSep") + " " + last;
+  }
+
+  function buildPrintItemRow(item, timed, numMap) {
+    var row = document.createElement("div");
+    row.className = "print-item cat-" + item.cat;
+
+    var parts = [];
+    var timeStr = minutesToTimeStr(timed.startMin) + t("timeline.timeSep") + minutesToTimeStr(timed.endMin);
+    if (timed.localTimeNote) timeStr += " " + t("timeline.localTimeNote");
+    parts.push(timeStr);
+
+    if (item.cat === "move") {
+      var modeLabel = window.I18N.MODE_NAMES[lang()][item.mode] || "";
+      var moveStr = modeLabel + " " + (item.dur || 0) + window.I18N.DURATION_UNITS[lang()];
+      if (timed.moveTzDiff != null) {
+        moveStr += " 🕐 " + tzDiffLabel(timed.moveTzDiff);
+      }
+      parts.push(moveStr);
+    } else {
+      var num = numMap[item.id];
+      if (num != null) parts.push(String(num));
+      var icon = window.I18N.CATEGORY_ICONS[item.cat] || "";
+      var nameStr = (icon ? icon + " " : "") + (item.name || "");
+      var localized = item.names && typeof item.names[lang()] === "string" ? item.names[lang()] : null;
+      if (localized && localized !== item.name) {
+        nameStr += "（" + localized + "）";
+      }
+      parts.push(nameStr);
+      parts.push((item.dur || 0) + window.I18N.DURATION_UNITS[lang()]);
+    }
+
+    var mainLine = document.createElement("div");
+    mainLine.className = "print-item-main";
+    mainLine.textContent = parts.join(" / ");
+    row.appendChild(mainLine);
+
+    if (item.note) {
+      var noteLine = document.createElement("div");
+      noteLine.className = "print-item-note";
+      noteLine.textContent = item.note;
+      row.appendChild(noteLine);
+    }
+
+    return row;
+  }
+
+  function buildPrintDaySection(day, dayIdx) {
+    var section = document.createElement("section");
+    section.className = "print-day";
+
+    var heading = document.createElement("h2");
+    heading.className = "print-day-heading";
+    var headingParts = [t("day.dayLabel", { n: dayIdx + 1 })];
+    if (day.date) headingParts.push(day.date);
+    if (day.tz) headingParts.push(day.tz);
+    heading.textContent = headingParts.join(" | ");
+    section.appendChild(heading);
+
+    var numMap = getItineraryNumberMap(day);
+    var list = document.createElement("div");
+    list.className = "print-day-items";
+    getDayTimedItems(day).forEach(function (timed) {
+      list.appendChild(buildPrintItemRow(timed.item, timed, numMap));
+    });
+    section.appendChild(list);
+
+    return section;
+  }
+
+  function buildPrintChecklistSection(titleKey, list) {
+    var section = document.createElement("section");
+    section.className = "print-checklist";
+    var h = document.createElement("h2");
+    h.textContent = t(titleKey);
+    section.appendChild(h);
+
+    var itemsWrap = document.createElement("div");
+    itemsWrap.className = "print-checklist-items";
+    list.forEach(function (it) {
+      var row = document.createElement("div");
+      row.className = "print-checklist-item";
+      row.textContent = (it.done ? "☑ " : "☐ ") + (it.text || "");
+      itemsWrap.appendChild(row);
+    });
+    section.appendChild(itemsWrap);
+
+    return section;
+  }
+
+  // #printView 全体を組み立てる。しおり全体・全日分を対象にする（選択中の日だけではない）。
+  // input/select/button は一切使わない（textContentベースの静的要素のみ）
+  function buildPrintView() {
+    var view = document.createElement("div");
+    view.id = "printView";
+
+    var header = document.createElement("div");
+    header.className = "print-doc-header";
+    var titleEl = document.createElement("h1");
+    titleEl.className = "print-title";
+    titleEl.textContent = tripDisplayTitle(trip);
+    header.appendChild(titleEl);
+    var range = printDateRangeText();
+    if (range) {
+      var rangeEl = document.createElement("p");
+      rangeEl.className = "print-date-range";
+      rangeEl.textContent = range;
+      header.appendChild(rangeEl);
+    }
+    view.appendChild(header);
+
+    trip.days.forEach(function (day, idx) {
+      view.appendChild(buildPrintDaySection(day, idx));
+    });
+
+    var checklistsWrap = document.createElement("div");
+    checklistsWrap.className = "print-checklists";
+    checklistsWrap.appendChild(buildPrintChecklistSection("checklist.packingTitle", trip.packing));
+    checklistsWrap.appendChild(buildPrintChecklistSection("checklist.todosTitle", trip.todos));
+    view.appendChild(checklistsWrap);
+
+    return view;
+  }
+
+  function handlePrintClick() {
+    var existing = document.getElementById("printView");
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+
+    var view = buildPrintView();
+    document.body.appendChild(view);
+    document.body.classList.add("printing");
+
+    var cleaned = false;
+    function cleanup() {
+      if (cleaned) return;
+      cleaned = true;
+      document.body.classList.remove("printing");
+      var pv = document.getElementById("printView");
+      if (pv) {
+        pv.innerHTML = "";
+        if (pv.parentNode) pv.parentNode.removeChild(pv);
+      }
+      window.removeEventListener("afterprint", cleanup);
+    }
+
+    window.addEventListener("afterprint", cleanup);
+    window.print();
+    // afterprint が発火しない/信頼できないブラウザ向けのフォールバック
+    // （window.print() は多くのブラウザでダイアログが閉じるまで処理をブロックするため、
+    // 呼び出し直後にタイマーで確実にクリーンアップする）
+    setTimeout(cleanup, 1000);
   }
 
   /* =========================================================
@@ -3128,7 +4823,7 @@
     });
 
     el.addDayBtn.addEventListener("click", function () {
-      trip.days.push({ date: "", startTime: "09:00", items: [] });
+      trip.days.push({ date: "", startTime: "09:00", tz: "", items: [] });
       currentDayIndex = trip.days.length - 1;
       saveState();
       render();
@@ -3149,6 +4844,9 @@
 
     var pressTimer = null;
     el.dayTabs.addEventListener("pointerdown", function (e) {
+      // 公開URL閲覧（16）: 長押しでの日削除ジェスチャーは day-tab-close ボタンの表示有無に関係なく
+      // 独立して発火するため、明示的にガードする
+      if (viewOnly) return;
       var tab = e.target.closest(".day-tab");
       if (!tab || e.target.closest(".day-tab-close")) return;
       var idx = parseInt(tab.dataset.index, 10);
@@ -3175,6 +4873,13 @@
       saveState();
       render();
     });
+    el.dayTzSelect.addEventListener("change", function () {
+      trip.days[currentDayIndex].tz = el.dayTzSelect.value;
+      saveState();
+      render();
+    });
+
+    el.printBtn.addEventListener("click", handlePrintClick);
 
     el.addFormCats.addEventListener("click", function (e) {
       var btn = e.target.closest(".cat-btn");
@@ -3197,6 +4902,47 @@
       runRouteCalculation(currentDayIndex);
     });
 
+    // 持ち物リスト・やることリスト（10）: タイムライン下（メイン）
+    el.packingAddBtn.addEventListener("click", function () {
+      addChecklistItem("packing", "main");
+    });
+    el.packingAddInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addChecklistItem("packing", "main");
+      }
+    });
+    el.todosAddBtn.addEventListener("click", function () {
+      addChecklistItem("todos", "main");
+    });
+    el.todosAddInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addChecklistItem("todos", "main");
+      }
+    });
+
+    // 準備リストへのクイックアクセス（11）: ヘッダー🧳ボタン・準備モーダル
+    el.prepBtn.addEventListener("click", openPrepModal);
+    el.prepPackingAddBtn.addEventListener("click", function () {
+      addChecklistItem("packing", "prep");
+    });
+    el.prepPackingAddInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addChecklistItem("packing", "prep");
+      }
+    });
+    el.prepTodosAddBtn.addEventListener("click", function () {
+      addChecklistItem("todos", "prep");
+    });
+    el.prepTodosAddInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addChecklistItem("todos", "prep");
+      }
+    });
+
     el.mapToggleBtn.addEventListener("click", toggleMapPanel);
     el.mapUpdateBtn.addEventListener("click", runMapUpdate);
 
@@ -3211,15 +4957,18 @@
 
     el.tripsBtn.addEventListener("click", openTripsModal);
     el.tripsNewBtn.addEventListener("click", createNewTrip);
-    el.tripsList.addEventListener("click", function (e) {
-      var delBtn = e.target.closest(".trip-list-item-delete");
-      if (delBtn) {
-        e.stopPropagation();
-        requestDeleteTrip(delBtn.dataset.id);
-        return;
-      }
-      var row = e.target.closest(".trip-list-item");
-      if (row) switchTrip(row.dataset.id);
+    el.tripsList.addEventListener("click", onTripsListClick);
+    el.tripsArchivedList.addEventListener("click", onTripsListClick);
+    el.tripsArchiveToggleBtn.addEventListener("click", function () {
+      tripsArchivedOpen = !tripsArchivedOpen;
+      renderTripsList();
+    });
+
+    // Google ログイン＋Firestore クラウド保存（15）
+    el.authBtn.addEventListener("click", onAuthBtnClick);
+    el.authLogoutBtn.addEventListener("click", function () {
+      closeModal(el.authModal);
+      logoutFromGoogle();
     });
 
     el.settingsBtn.addEventListener("click", openSettingsModal);
@@ -3239,6 +4988,17 @@
       copyToClipboard(el.shareUrl.value);
       showToast(t("share.copied"));
     });
+    el.sharePreviewBtn.addEventListener("click", openPublicPreviewModal);
+
+    // 公開層と公開URL（16）
+    if (el.sharePublicToggle) el.sharePublicToggle.addEventListener("change", onSharePublicToggleChange);
+    if (el.sharePublicCopyBtn) {
+      el.sharePublicCopyBtn.addEventListener("click", function () {
+        copyToClipboard(el.sharePublicUrl.value);
+        showToast(t("share.copied"));
+      });
+    }
+    if (el.viewOnlyBackBtn) el.viewOnlyBackBtn.addEventListener("click", exitViewOnlyMode);
 
     el.textioBtn.addEventListener("click", openTextioModal);
     el.textioCopyBtn.addEventListener("click", function () {
@@ -3300,7 +5060,7 @@
     var store = loadState();
     if (!store) {
       var sampleId = genId();
-      store = { currentId: sampleId, trips: [{ id: sampleId, data: createSampleTrip() }] };
+      store = { currentId: sampleId, trips: [{ id: sampleId, data: createSampleTrip(), archived: false, cloudId: null, updatedAt: 0, publicId: null }] };
     }
     tripsStore = store.trips;
     currentTripId = store.currentId;
@@ -3310,11 +5070,16 @@
 
     initMap();
     applyMapPanelState();
+    initFirebase();
     bindEvents();
+    // 公開層と公開URL（16）: #p= は #d= と排他（ハッシュの接頭辞が異なる）なので両方呼んでよい。
+    // checkPublicHash が viewOnly=true を同期的に立てた場合、直後の render()/saveState() は自動的に無害化される
+    checkPublicHash();
     checkSharedHash();
     render();
 
     // 起動時の移行・正規化結果を必ず永続化する（v1→v2移行の直後にリロードされても再移行されないように）
+    // viewOnly 中（公開URL閲覧）は saveState() が no-op のため、ローカルデータは一切書き換わらない
     saveState();
   }
 

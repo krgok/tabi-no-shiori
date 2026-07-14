@@ -9,6 +9,11 @@
 </head>
 <body>
 <div id="app">
+  <!-- 公開層と公開URL（16）: #p=<publicId> で開いたときの読み取り専用バナー -->
+  <div id="viewOnlyBanner" class="view-only-banner hidden">
+    <span class="view-only-badge" data-i18n="viewOnly.badge">👁 閲覧モード</span>
+    <button type="button" id="viewOnlyBackBtn" class="btn btn-outline" data-i18n="viewOnly.backToMine">自分のしおりに戻る</button>
+  </div>
   <header class="app-header">
     <div class="header-title-row">
       <h1 id="tripTitle" class="trip-title" contenteditable="true" spellcheck="false"></h1>
@@ -23,9 +28,18 @@
           </select>
         </label>
         <button type="button" id="tripsBtn" class="btn btn-outline btn-icon" data-i18n-aria="header.tripsAria" aria-label="しおり一覧を開く" title="しおり一覧">📚</button>
+        <button type="button" id="prepBtn" class="btn btn-outline btn-icon" data-i18n-aria="header.prepAria" aria-label="持ち物・やること" title="持ち物・やること">
+          🧳
+          <span id="prepBadge" class="header-icon-badge hidden">0</span>
+        </button>
         <button type="button" id="shareBtn" class="btn btn-outline" data-i18n="header.share">共有</button>
         <button type="button" id="textioBtn" class="btn btn-outline" data-i18n="header.textio">CSV入出力</button>
+        <button type="button" id="printBtn" class="btn btn-outline btn-icon" data-i18n-aria="header.printAria" aria-label="PDF出力" title="PDF出力">🖨</button>
         <button type="button" id="settingsBtn" class="btn btn-outline btn-icon" data-i18n-aria="settings.buttonAria" aria-label="設定" title="設定">⚙️</button>
+        <!-- Google ログイン＋Firestore クラウド保存（15）: Firebase SDK読み込み・初期化に失敗した場合は非表示になる -->
+        <button type="button" id="authBtn" class="btn btn-outline btn-auth hidden" data-i18n-aria="auth.login" aria-label="ログイン" title="ログイン">
+          <span id="authBtnContent" data-i18n="auth.login">ログイン</span>
+        </button>
       </div>
     </div>
 
@@ -42,6 +56,10 @@
       <label class="day-meta-field">
         <span data-i18n="day.startTime">開始時刻</span>
         <input type="time" id="dayStartTimeInput">
+      </label>
+      <label class="day-meta-field">
+        <span data-i18n="day.tzLabel">🕐 タイムゾーン</span>
+        <select id="dayTzSelect"></select>
       </label>
     </div>
   </header>
@@ -85,6 +103,34 @@
             </div>
           </div>
         </section>
+
+        <div class="checklists-row" id="checklistsRow">
+          <section class="checklist-section" id="packingSection">
+            <div class="checklist-header">
+              <h2 data-i18n="checklist.packingTitle">🧳 持ち物リスト</h2>
+              <span class="checklist-progress" id="packingProgress">0/0</span>
+            </div>
+            <div class="checklist-items" id="packingItems"></div>
+            <p class="checklist-empty hidden" id="packingEmptyMsg" data-i18n="checklist.packingEmpty">持ち物を追加しましょう</p>
+            <div class="checklist-add-row">
+              <input type="text" id="packingAddInput" class="checklist-add-input" data-i18n-placeholder="checklist.addPlaceholder" placeholder="追加する項目を入力">
+              <button type="button" id="packingAddBtn" class="btn btn-outline checklist-add-btn" data-i18n="add.button">＋ 追加</button>
+            </div>
+          </section>
+
+          <section class="checklist-section" id="todosSection">
+            <div class="checklist-header">
+              <h2 data-i18n="checklist.todosTitle">✅ やることリスト</h2>
+              <span class="checklist-progress" id="todosProgress">0/0</span>
+            </div>
+            <div class="checklist-items" id="todosItems"></div>
+            <p class="checklist-empty hidden" id="todosEmptyMsg" data-i18n="checklist.todosEmpty">やることを追加しましょう</p>
+            <div class="checklist-add-row">
+              <input type="text" id="todosAddInput" class="checklist-add-input" data-i18n-placeholder="checklist.addPlaceholder" placeholder="追加する項目を入力">
+              <button type="button" id="todosAddBtn" class="btn btn-outline checklist-add-btn" data-i18n="add.button">＋ 追加</button>
+            </div>
+          </section>
+        </div>
       </div>
 
       <div class="map-section" id="mapSection">
@@ -111,10 +157,40 @@
     <button type="button" class="modal-close" data-close="shareModal" data-i18n-aria="modal.close" aria-label="閉じる">×</button>
     <h2 data-i18n="share.title">しおりを共有</h2>
     <p data-i18n="share.desc">下のリンクをコピーして、家族や友達に送りましょう。</p>
+    <p class="share-private-note" data-i18n="share.privateNote">このリンクには非公開項目は含まれません。</p>
     <textarea id="shareUrl" class="share-url" readonly rows="4"></textarea>
     <div class="modal-actions">
+      <button type="button" id="sharePreviewBtn" class="btn btn-outline" data-i18n="share.previewButton">🔍 公開時の見え方を確認</button>
       <button type="button" id="shareCopyBtn" class="btn btn-primary" data-i18n="share.copy">リンクをコピー</button>
     </div>
+
+    <hr class="share-divider">
+
+    <!-- 公開層と公開URL（16）: ログイン時のみ表示。未ログイン時は下の案内のみ -->
+    <div id="sharePublicSection" class="share-public-section hidden">
+      <label class="share-public-toggle-row">
+        <input type="checkbox" id="sharePublicToggle">
+        <span data-i18n="share.publicToggleLabel">🌐 公開する（短い公開リンクを発行）</span>
+      </label>
+      <p id="sharePublicBadge" class="share-public-badge hidden" data-i18n="share.publicBadge">🌐 公開中</p>
+      <p id="sharePublicExcluded" class="share-public-excluded hidden"></p>
+      <div id="sharePublicUrlWrap" class="share-public-url-wrap hidden">
+        <textarea id="sharePublicUrl" class="share-url" readonly rows="2"></textarea>
+        <button type="button" id="sharePublicCopyBtn" class="btn btn-outline" data-i18n="share.copy">リンクをコピー</button>
+      </div>
+    </div>
+    <p id="shareLoginHint" class="share-login-hint hidden" data-i18n="share.loginHint">ログインすると短い公開リンクを発行できます。</p>
+  </div>
+</div>
+
+<!-- 公開プレビューモーダル（14 非公開マークと公開用データ） -->
+<div id="publicPreviewModal" class="modal-overlay hidden">
+  <div class="modal modal-public-preview">
+    <button type="button" class="modal-close" data-close="publicPreviewModal" data-i18n-aria="modal.close" aria-label="閉じる">×</button>
+    <h2 data-i18n="publicPreview.title">公開時の見え方</h2>
+    <p data-i18n="publicPreview.desc">🔒非公開マークを付けた項目を除いた、共有相手に見える内容です。</p>
+    <p id="publicPreviewExcluded" class="public-preview-excluded"></p>
+    <div id="publicPreviewContent" class="public-preview-content"></div>
   </div>
 </div>
 
@@ -158,14 +234,66 @@
   </div>
 </div>
 
+<!-- アカウントモーダル（Google ログイン＋Firestore クラウド保存 15） -->
+<div id="authModal" class="modal-overlay hidden">
+  <div class="modal modal-auth">
+    <button type="button" class="modal-close" data-close="authModal" data-i18n-aria="modal.close" aria-label="閉じる">×</button>
+    <h2 data-i18n="auth.menuTitle">アカウント</h2>
+    <p id="authEmail" class="auth-email"></p>
+    <div class="modal-actions">
+      <button type="button" id="authLogoutBtn" class="btn btn-outline" data-i18n="auth.logout">ログアウト</button>
+    </div>
+  </div>
+</div>
+
 <!-- しおり一覧モーダル -->
 <div id="tripsModal" class="modal-overlay hidden">
   <div class="modal">
     <button type="button" class="modal-close" data-close="tripsModal" data-i18n-aria="modal.close" aria-label="閉じる">×</button>
     <h2 data-i18n="trips.title">しおり一覧</h2>
+    <p id="tripsSyncStatus" class="trips-sync-status hidden" data-i18n="auth.syncingBadge">☁ 同期中</p>
     <div id="tripsList" class="trips-list"></div>
+    <button type="button" id="tripsArchiveToggleBtn" class="trips-archive-toggle hidden" aria-expanded="false">
+      <span id="tripsArchiveToggleLabel"></span>
+    </button>
+    <div id="tripsArchivedList" class="trips-list trips-archived-list hidden"></div>
     <div class="modal-actions">
       <button type="button" id="tripsNewBtn" class="btn btn-primary" data-i18n="trips.newTrip">＋ 新しいしおり</button>
+    </div>
+  </div>
+</div>
+
+<!-- 準備モーダル（持ち物・やること） -->
+<div id="prepModal" class="modal-overlay hidden">
+  <div class="modal modal-prep">
+    <button type="button" class="modal-close" data-close="prepModal" data-i18n-aria="modal.close" aria-label="閉じる">×</button>
+    <h2 data-i18n="prep.title">持ち物・やること</h2>
+    <div class="checklists-row">
+      <section class="checklist-section" id="prepPackingSection">
+        <div class="checklist-header">
+          <h2 data-i18n="checklist.packingTitle">🧳 持ち物リスト</h2>
+          <span class="checklist-progress" id="prepPackingProgress">0/0</span>
+        </div>
+        <div class="checklist-items" id="prepPackingItems"></div>
+        <p class="checklist-empty hidden" id="prepPackingEmptyMsg" data-i18n="checklist.packingEmpty">持ち物を追加しましょう</p>
+        <div class="checklist-add-row">
+          <input type="text" id="prepPackingAddInput" class="checklist-add-input" data-i18n-placeholder="checklist.addPlaceholder" placeholder="追加する項目を入力">
+          <button type="button" id="prepPackingAddBtn" class="btn btn-outline checklist-add-btn" data-i18n="add.button">＋ 追加</button>
+        </div>
+      </section>
+
+      <section class="checklist-section" id="prepTodosSection">
+        <div class="checklist-header">
+          <h2 data-i18n="checklist.todosTitle">✅ やることリスト</h2>
+          <span class="checklist-progress" id="prepTodosProgress">0/0</span>
+        </div>
+        <div class="checklist-items" id="prepTodosItems"></div>
+        <p class="checklist-empty hidden" id="prepTodosEmptyMsg" data-i18n="checklist.todosEmpty">やることを追加しましょう</p>
+        <div class="checklist-add-row">
+          <input type="text" id="prepTodosAddInput" class="checklist-add-input" data-i18n-placeholder="checklist.addPlaceholder" placeholder="追加する項目を入力">
+          <button type="button" id="prepTodosAddBtn" class="btn btn-outline checklist-add-btn" data-i18n="add.button">＋ 追加</button>
+        </div>
+      </section>
     </div>
   </div>
 </div>
@@ -186,6 +314,10 @@
 
 <script src="i18n.js"></script>
 <script src="vendor/leaflet/leaflet.js"></script>
+<!-- Google ログイン＋Firestore クラウド保存（15）: Firebase JS SDK compat版。読み込み・初期化に失敗してもアプリはローカル動作を継続する -->
+<script src="vendor/firebase/firebase-app-compat.js"></script>
+<script src="vendor/firebase/firebase-auth-compat.js"></script>
+<script src="vendor/firebase/firebase-firestore-compat.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
