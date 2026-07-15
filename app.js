@@ -92,6 +92,9 @@
   // 日/しおりの切り替えでリセットしなくても別項目のカードに誤って表示されることはない
   var fixedStartEditingId = null;
   var dragState = null;
+  // 持ち物・やることリストの並べ替え（10 拡張）: タイムラインのドラッグ（dragState）とは
+  // 別のDOMサブツリー・別の対象配列（trip.packing/trip.todos）を扱うため、状態も分けて持つ
+  var checklistDragState = null;
   var leafletMap = null;
   var mapMarkersLayer = null;
   var mapLineLayer = null;
@@ -182,6 +185,31 @@
     return new Promise(function (resolve) {
       setTimeout(resolve, ms);
     });
+  }
+
+  // 日付の自動連番（2）: "YYYY-MM-DD" 文字列に1日加算した "YYYY-MM-DD" を返す。
+  // 必ずUTCベースで加算する（ローカルタイムゾーンのDST切替等で日がずれるのを防ぐため）。
+  // 形式が不正な文字列は "" を返す（呼び出し側で「連鎖停止」として扱われる）
+  function addOneDayToDateStr(dateStr) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || ""));
+    if (!m) return "";
+    var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
+  }
+
+  // 日付の自動連番（2）の中核: index 0（Day1）は常にユーザー入力のアンカーとして対象外にし、
+  // index 1以降の日を順に見て、dateManual===false の日を「直前の日の日付 + 1日」で埋める。
+  // 直前の日の日付が空（または不正な形式）なら、その日も空のまま（連鎖を止める）。
+  // 「Day1+N日」方式ではなく「直前の日から+1日」方式のため、手動で日付を変えた/飛ばした日の
+  // 直後からも自然に連番が続く。日付入力の変更・日の追加・日の削除のたびに呼び出す
+  function recalcAutoDates() {
+    for (var i = 1; i < trip.days.length; i++) {
+      var day = trip.days[i];
+      if (day.dateManual) continue;
+      var prevDate = trip.days[i - 1].date;
+      day.date = prevDate ? addOneDayToDateStr(prevDate) : "";
+    }
   }
 
   function lang() {
@@ -632,6 +660,14 @@
         tz: typeof d.tz === "string" ? d.tz : "",
         // 非公開マーク（14拡張）: その日を丸ごと非公開。既定 false。boolean 以外は防御的にフォールバック
         priv: !!d.priv,
+        // 日付の自動連番（2）: true なら日付をユーザーが手動で確定した日（自動再計算の対象外）。
+        // index 0（Day1）はこのフラグに関わらず常にアンカー（recalcAutoDates の対象外）として扱われる。
+        // 旧データ移行: この機能より前に作られたしおりは dateManual を持たない。そこに既に日付が
+        // 入っているなら、それはユーザーが手で入力したものなので true とみなす。false にしてしまうと
+        // Day1 の編集で既存の日付（意図的に飛ばした日など）を黙って上書きしてしまうため。
+        // boolean が明示されている場合はその値を尊重する（既定 false の新規日は自動連番の対象）
+        dateManual:
+          typeof d.dateManual === "boolean" ? d.dateManual : !!(typeof d.date === "string" && d.date),
         items: []
       };
       var items = Array.isArray(d.items) ? d.items : [];
@@ -1226,7 +1262,7 @@
       title: "東京旅行",
       titles: Object.assign({}, window.I18N.SAMPLE_TRIP_TITLES),
       lang: "ja",
-      days: [{ date: "2026-07-20", startTime: "09:00", tz: "", priv: false, items: items }],
+      days: [{ date: "2026-07-20", startTime: "09:00", tz: "", priv: false, dateManual: false, items: items }],
       packing: [],
       todos: [],
       packingPriv: false,
@@ -1241,7 +1277,7 @@
       title: window.I18N.NEW_TRIP_TITLES.ja,
       titles: Object.assign({}, window.I18N.NEW_TRIP_TITLES),
       lang: lang(),
-      days: [{ date: "", startTime: "09:00", tz: "", priv: false, items: [] }],
+      days: [{ date: "", startTime: "09:00", tz: "", priv: false, dateManual: false, items: [] }],
       packing: [],
       todos: [],
       packingPriv: false,
@@ -1261,6 +1297,7 @@
     el.dayTabs = document.getElementById("dayTabs");
     el.addDayBtn = document.getElementById("addDayBtn");
     el.dayDateInput = document.getElementById("dayDateInput");
+    el.dayDateAutoBadge = document.getElementById("dayDateAutoBadge");
     el.dayStartTimeInput = document.getElementById("dayStartTimeInput");
     el.dayTzSelect = document.getElementById("dayTzSelect");
     // 非公開マーク（14拡張）: 日単位の🔓/🔒トグルとバッジ
@@ -1497,6 +1534,13 @@
     var day = trip.days[currentDayIndex];
     el.dayDateInput.value = day.date || "";
     el.dayStartTimeInput.value = day.startTime || "09:00";
+
+    // 日付の自動連番（2）: index>=1 の日で dateManual===false かつ日付が自動で入っている場合のみ、
+    // 控えめな「自動」ヒントバッジを表示する（手動固定・空欄・Day1では表示しない）
+    if (el.dayDateAutoBadge) {
+      var showAutoBadge = currentDayIndex >= 1 && !day.dateManual && !!day.date;
+      el.dayDateAutoBadge.classList.toggle("hidden", !showAutoBadge);
+    }
     populateTzSelect(el.dayTzSelect, t("day.tzNone"));
     el.dayTzSelect.value = day.tz || "";
 
@@ -1695,6 +1739,13 @@
     return "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(q);
   }
 
+  // メモ欄（textarea）の高さを内容に合わせて伸縮させる。2行以上でも全文が見えるようにするため。
+  // 一度 auto に戻してから scrollHeight を読むことで、文字を消したときの縮小にも対応する
+  function autoGrowNote(ta) {
+    ta.style.height = "auto";
+    ta.style.height = ta.scrollHeight + "px";
+  }
+
   function renderTimeline() {
     var day = trip.days[currentDayIndex];
     el.timeline.innerHTML = "";
@@ -1709,6 +1760,10 @@
     getDayTimedItems(day).forEach(function (timed, idx) {
       el.timeline.appendChild(buildItemCard(timed.item, timed.startMin, timed.endMin, day, idx, numMap, timed));
     });
+
+    // メモ欄の初期高さ合わせ。scrollHeight はDOMに入ってからでないと測れないためここで行う。
+    // requestAnimationFrame はタブ非アクティブ時に発火しないことがあるので同期実行する
+    Array.prototype.forEach.call(el.timeline.querySelectorAll(".item-note"), autoGrowNote);
   }
 
   function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
@@ -2136,6 +2191,10 @@
     noteInput.rows = 1;
     noteInput.placeholder = t("timeline.notePlaceholder");
     noteInput.value = item.note || "";
+    // 入力のたびに高さを追従させる（改行・折り返しで2行以上になっても全文が見えるように）
+    noteInput.addEventListener("input", function () {
+      autoGrowNote(noteInput);
+    });
     noteInput.addEventListener("change", function () {
       item.note = noteInput.value;
       saveState();
@@ -2286,6 +2345,15 @@
     var row = document.createElement("div");
     row.className = "checklist-item" + (it.done ? " done" : "") + (it.priv ? " checklist-item-private" : "");
     row.dataset.id = it.id;
+
+    // 持ち物・やることリストの並べ替え（10 拡張）: ハンドルからのみドラッグ開始できるようにする
+    // （チェックボックス・テキスト編集を誤操作で邪魔しないため）。viewOnly 時は既存の
+    // .view-only-mode スコープCSSで非表示にする（タイムラインの .drag-handle と同じ方針）
+    var handle = document.createElement("div");
+    handle.className = "checklist-drag-handle";
+    handle.setAttribute("aria-label", t("timeline.dragHandleLabel"));
+    handle.textContent = "⠿";
+    row.appendChild(handle);
 
     var checkbox = document.createElement("input");
     checkbox.type = "checkbox";
@@ -2449,6 +2517,173 @@
   }
 
   /* =========================================================
+   * 持ち物・やることリストの並べ替え（10 拡張・Pointer Events）
+   * タイムラインのドラッグ実装（dragState・onDragHandlePointerDown系）と同じ設計思想
+   * （Pointer Events + ハンドルからのみ開始 + ドロップインジケータ）を踏襲するが、
+   * 対象配列が2種類（trip.packing/trip.todos）かつ描画先が2箇所（main/prepModal）ある点が
+   * タイムライン（1つの el.timeline・1つの day.items）と異なるため、別関数として実装する。
+   * positionGhost はタイムライン側と共通利用する
+   * ========================================================= */
+  function onChecklistDragPointerDown(e) {
+    if (viewOnly) return;
+    var handle = e.target.closest(".checklist-drag-handle");
+    if (!handle) return;
+    var row = handle.closest(".checklist-item");
+    if (!row) return;
+
+    e.preventDefault();
+
+    var container = e.currentTarget;
+    var kind = container.dataset.checklistKind;
+    var id = row.dataset.id;
+    var list = checklistArray(kind);
+    var startIndex = list.findIndex(function (it) {
+      return it.id === id;
+    });
+    if (startIndex === -1) return;
+
+    var rect = row.getBoundingClientRect();
+
+    var ghost = document.createElement("div");
+    ghost.className = "drag-ghost";
+    var textNode = row.querySelector(".checklist-text-input");
+    var ghostText = document.createElement("span");
+    ghostText.textContent = textNode ? textNode.value : "";
+    ghost.appendChild(ghostText);
+    document.body.appendChild(ghost);
+
+    var offsetY = e.clientY - rect.top;
+    positionGhost(ghost, e.clientX, e.clientY, offsetY);
+
+    row.classList.add("dragging");
+
+    var indicator = document.createElement("div");
+    indicator.className = "drop-indicator";
+    row.parentNode.insertBefore(indicator, row.nextSibling);
+
+    checklistDragState = {
+      pointerId: e.pointerId,
+      handle: handle,
+      row: row,
+      container: container,
+      kind: kind,
+      ghost: ghost,
+      indicator: indicator,
+      offsetY: offsetY,
+      draggedId: id
+    };
+
+    try {
+      handle.setPointerCapture(e.pointerId);
+    } catch (err) {
+      /* ignore */
+    }
+
+    handle.addEventListener("pointermove", onChecklistDragPointerMove);
+    handle.addEventListener("pointerup", onChecklistDragPointerUp);
+    handle.addEventListener("pointercancel", onChecklistDragPointerCancel);
+  }
+
+  function onChecklistDragPointerMove(e) {
+    if (!checklistDragState || e.pointerId !== checklistDragState.pointerId) return;
+    positionGhost(checklistDragState.ghost, e.clientX, e.clientY, checklistDragState.offsetY);
+
+    var container = checklistDragState.container;
+    var rows = Array.prototype.slice.call(container.querySelectorAll(".checklist-item"));
+    var targetEl = null;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r === checklistDragState.row) continue;
+      var rect = r.getBoundingClientRect();
+      var mid = rect.top + rect.height / 2;
+      if (e.clientY < mid) {
+        targetEl = r;
+        break;
+      }
+    }
+
+    if (targetEl) {
+      container.insertBefore(checklistDragState.indicator, targetEl);
+    } else {
+      container.appendChild(checklistDragState.indicator);
+    }
+  }
+
+  function onChecklistDragPointerUp(e) {
+    if (!checklistDragState || e.pointerId !== checklistDragState.pointerId) return;
+    finishChecklistDrag();
+  }
+
+  function onChecklistDragPointerCancel(e) {
+    if (!checklistDragState || e.pointerId !== checklistDragState.pointerId) return;
+    cleanupChecklistDrag();
+  }
+
+  function finishChecklistDrag() {
+    var container = checklistDragState.container;
+    var kind = checklistDragState.kind;
+    var indicator = checklistDragState.indicator;
+    var draggedId = checklistDragState.draggedId;
+
+    var nodes = Array.prototype.slice.call(container.children).filter(function (node) {
+      return node === indicator || (node.classList && node.classList.contains("checklist-item"));
+    });
+
+    var indicatorPos = nodes.indexOf(indicator);
+    var idsBeforeIndicator = [];
+    var allIds = [];
+    nodes.forEach(function (node, i) {
+      if (node === indicator) return;
+      allIds.push(node.dataset.id);
+      if (indicatorPos !== -1 && i < indicatorPos && node.dataset.id !== draggedId) {
+        idsBeforeIndicator.push(node.dataset.id);
+      }
+    });
+
+    var idsWithoutDragged = allIds.filter(function (id) {
+      return id !== draggedId;
+    });
+    var insertAt = indicatorPos === -1 ? idsWithoutDragged.length : idsBeforeIndicator.length;
+    idsWithoutDragged.splice(insertAt, 0, draggedId);
+
+    var list = checklistArray(kind);
+    var itemsById = {};
+    list.forEach(function (it) {
+      itemsById[it.id] = it;
+    });
+    var reordered = idsWithoutDragged.map(function (id) {
+      return itemsById[id];
+    });
+    if (kind === "packing") {
+      trip.packing = reordered;
+    } else {
+      trip.todos = reordered;
+    }
+
+    cleanupChecklistDrag();
+    saveState();
+    // main/prepModal の両方に反映する（renderChecklistSection の既存パターンを踏襲）
+    renderChecklistSection(kind);
+  }
+
+  function cleanupChecklistDrag() {
+    if (!checklistDragState) return;
+    var handle = checklistDragState.handle;
+    handle.removeEventListener("pointermove", onChecklistDragPointerMove);
+    handle.removeEventListener("pointerup", onChecklistDragPointerUp);
+    handle.removeEventListener("pointercancel", onChecklistDragPointerCancel);
+    try {
+      handle.releasePointerCapture(checklistDragState.pointerId);
+    } catch (err) {
+      /* ignore */
+    }
+    if (checklistDragState.ghost && checklistDragState.ghost.parentNode) checklistDragState.ghost.parentNode.removeChild(checklistDragState.ghost);
+    if (checklistDragState.indicator && checklistDragState.indicator.parentNode) checklistDragState.indicator.parentNode.removeChild(checklistDragState.indicator);
+    if (checklistDragState.row) checklistDragState.row.classList.remove("dragging");
+    checklistDragState = null;
+  }
+
+  /* =========================================================
    * 項目 CRUD
    * ========================================================= */
   function deleteItem(id) {
@@ -2534,6 +2769,8 @@
       } else if (currentDayIndex > idx) {
         currentDayIndex -= 1;
       }
+      // 日付の自動連番（2）: 日を削除すると前後関係が変わるため、自動の日を再計算する
+      recalcAutoDates();
       saveState();
       render();
     });
@@ -5137,8 +5374,10 @@
 
     el.addDayBtn.addEventListener("click", function () {
       if (viewOnly) return;
-      trip.days.push({ date: "", startTime: "09:00", tz: "", priv: false, items: [] });
+      trip.days.push({ date: "", startTime: "09:00", tz: "", priv: false, dateManual: false, items: [] });
       currentDayIndex = trip.days.length - 1;
+      // 日付の自動連番（2）: 新しい日は既定 dateManual:false のため、直前の日の日付+1日で自動的に埋まる
+      recalcAutoDates();
       saveState();
       render();
     });
@@ -5179,8 +5418,16 @@
     });
 
     el.dayDateInput.addEventListener("change", function () {
-      trip.days[currentDayIndex].date = el.dayDateInput.value;
+      var day = trip.days[currentDayIndex];
+      day.date = el.dayDateInput.value;
+      // 日付の自動連番（2）: index 0（Day1）は常にアンカーのため dateManual を触らない。
+      // index >= 1 は、空でない値を入力したら手動固定（自動対象外）、空にしたら自動へ戻す
+      if (currentDayIndex >= 1) {
+        day.dateManual = !!day.date;
+      }
+      recalcAutoDates();
       saveState();
+      render();
     });
     el.dayStartTimeInput.addEventListener("change", function () {
       trip.days[currentDayIndex].startTime = el.dayStartTimeInput.value || "09:00";
@@ -5288,6 +5535,12 @@
         toggleListPriv("todos");
       });
     }
+
+    // 持ち物・やることリストの並べ替え（10 拡張）: main（タイムライン下）・prepModal（🧳）の
+    // 4つの一覧すべてでドラッグ並べ替えを有効にする（ハンドルからのみ開始）
+    [el.packingItems, el.todosItems, el.prepPackingItems, el.prepTodosItems].forEach(function (container) {
+      if (container) container.addEventListener("pointerdown", onChecklistDragPointerDown);
+    });
 
     el.mapToggleBtn.addEventListener("click", toggleMapPanel);
     el.mapUpdateBtn.addEventListener("click", runMapUpdate);

@@ -52,6 +52,7 @@
       <label class="day-meta-field">
         <span data-i18n="day.date">日付</span>
         <input type="date" id="dayDateInput">
+        <span id="dayDateAutoBadge" class="day-date-auto-badge hidden" data-i18n="day.dateAutoBadge">自動</span>
       </label>
       <label class="day-meta-field">
         <span data-i18n="day.startTime">開始時刻</span>
@@ -120,7 +121,7 @@
               </div>
             </div>
             <p class="checklist-list-priv-badge hidden" id="packingListPrivBadge" data-i18n="checklist.listPrivBadge">🔒 非公開</p>
-            <div class="checklist-items" id="packingItems"></div>
+            <div class="checklist-items" id="packingItems" data-checklist-kind="packing"></div>
             <p class="checklist-empty hidden" id="packingEmptyMsg" data-i18n="checklist.packingEmpty">持ち物を追加しましょう</p>
             <div class="checklist-add-row">
               <input type="text" id="packingAddInput" class="checklist-add-input" data-i18n-placeholder="checklist.addPlaceholder" placeholder="追加する項目を入力">
@@ -138,7 +139,7 @@
               </div>
             </div>
             <p class="checklist-list-priv-badge hidden" id="todosListPrivBadge" data-i18n="checklist.listPrivBadge">🔒 非公開</p>
-            <div class="checklist-items" id="todosItems"></div>
+            <div class="checklist-items" id="todosItems" data-checklist-kind="todos"></div>
             <p class="checklist-empty hidden" id="todosEmptyMsg" data-i18n="checklist.todosEmpty">やることを追加しましょう</p>
             <div class="checklist-add-row">
               <input type="text" id="todosAddInput" class="checklist-add-input" data-i18n-placeholder="checklist.addPlaceholder" placeholder="追加する項目を入力">
@@ -294,7 +295,7 @@
           </div>
         </div>
         <p class="checklist-list-priv-badge hidden" id="prepPackingListPrivBadge" data-i18n="checklist.listPrivBadge">🔒 非公開</p>
-        <div class="checklist-items" id="prepPackingItems"></div>
+        <div class="checklist-items" id="prepPackingItems" data-checklist-kind="packing"></div>
         <p class="checklist-empty hidden" id="prepPackingEmptyMsg" data-i18n="checklist.packingEmpty">持ち物を追加しましょう</p>
         <div class="checklist-add-row">
           <input type="text" id="prepPackingAddInput" class="checklist-add-input" data-i18n-placeholder="checklist.addPlaceholder" placeholder="追加する項目を入力">
@@ -312,7 +313,7 @@
           </div>
         </div>
         <p class="checklist-list-priv-badge hidden" id="prepTodosListPrivBadge" data-i18n="checklist.listPrivBadge">🔒 非公開</p>
-        <div class="checklist-items" id="prepTodosItems"></div>
+        <div class="checklist-items" id="prepTodosItems" data-checklist-kind="todos"></div>
         <p class="checklist-empty hidden" id="prepTodosEmptyMsg" data-i18n="checklist.todosEmpty">やることを追加しましょう</p>
         <div class="checklist-add-row">
           <input type="text" id="prepTodosAddInput" class="checklist-add-input" data-i18n-placeholder="checklist.addPlaceholder" placeholder="追加する項目を入力">
