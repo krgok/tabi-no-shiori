@@ -2764,11 +2764,16 @@
     checkbox.disabled = viewOnly; // 公開URL閲覧（16）: チェックボックスも読み取り専用にする
     row.appendChild(checkbox);
 
-    var textInput = document.createElement("input");
-    textInput.type = "text";
+    // input ではなく textarea を使う。input は構造上1行しか表示できず、長い項目名が
+    // 見切れてしまうため。高さは autoGrowNote() が内容に合わせて調整する
+    var textInput = document.createElement("textarea");
+    textInput.rows = 1;
     textInput.className = "checklist-text-input";
     textInput.value = it.text;
     textInput.placeholder = t("checklist.addPlaceholder");
+    textInput.addEventListener("input", function () {
+      autoGrowNote(textInput);
+    });
     textInput.addEventListener("change", function () {
       it.text = textInput.value;
       saveState();
@@ -2847,6 +2852,10 @@
         els.items.appendChild(buildChecklistRow(kind, it));
       });
 
+      // 項目名の高さを内容に合わせる。scrollHeight はDOMに入ってからでないと測れないためここで行う。
+      // requestAnimationFrame はタブ非アクティブ時に発火しないことがあるので同期実行する
+      Array.prototype.forEach.call(els.items.querySelectorAll(".checklist-text-input"), autoGrowNote);
+
       // 非公開マーク（14拡張）: リスト全体単位の🔓/🔒トグル・バッジ・淡いスタイル
       if (els.section) {
         els.section.classList.toggle("checklist-section-private", isListPriv);
@@ -2910,6 +2919,9 @@
   function openPrepModal() {
     renderChecklists();
     openModal(el.prepModal);
+    // 項目名の高さの測り直し。モーダルが閉じている間は要素が非表示で scrollHeight が
+    // 測れず（0扱い）、renderChecklists 時点の自動伸縮が効かないため、表示した後に必ずやり直す
+    Array.prototype.forEach.call(el.prepModal.querySelectorAll(".checklist-text-input"), autoGrowNote);
   }
 
   /* =========================================================

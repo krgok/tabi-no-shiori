@@ -1390,7 +1390,9 @@ select {
 
 .checklist-item {
   display: flex;
-  align-items: center;
+  /* 項目名が複数行に伸びたとき、チェックボックス・ハンドル・ボタン類が
+     中央に浮かず1行目の高さに揃うようにする */
+  align-items: flex-start;
   gap: 8px;
   background: var(--paper);
   border-radius: var(--radius-sm);
@@ -1409,6 +1411,7 @@ select {
 .checklist-text-input {
   flex: 1;
   min-width: 0;
+  width: 100%;
   border: none;
   background: transparent;
   font-size: 0.88rem;
@@ -1416,6 +1419,12 @@ select {
   padding: 3px 4px;
   border-radius: var(--radius-sm);
   outline: none;
+  /* 長い項目名を折り返して全文見せる。高さは autoGrowNote() が内容に合わせて設定するため、
+     内部スクロールバーは出さない。手動リサイズのつまみも不要 */
+  resize: none;
+  overflow: hidden;
+  line-height: 1.4;
+  font-family: inherit;
 }
 
 .checklist-text-input:focus,
