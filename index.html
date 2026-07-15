@@ -14,6 +14,11 @@
     <span class="view-only-badge" data-i18n="viewOnly.badge">👁 閲覧モード</span>
     <button type="button" id="viewOnlyBackBtn" class="btn btn-outline" data-i18n="viewOnly.backToMine">自分のしおりに戻る</button>
   </div>
+  <!-- 編集できる共有リンク（18）: #e=<editId> で開いたときの共同編集バナー -->
+  <div id="collabBanner" class="collab-banner hidden">
+    <span class="collab-badge" data-i18n="collab.badge">✏️ 共同編集中</span>
+    <button type="button" id="collabBackBtn" class="btn btn-outline" data-i18n="collab.backToMine">自分のしおりに戻る</button>
+  </div>
   <header class="app-header">
     <div class="header-title-row">
       <h1 id="tripTitle" class="trip-title" contenteditable="true" spellcheck="false"></h1>
@@ -196,6 +201,24 @@
       </div>
     </div>
     <p id="shareLoginHint" class="share-login-hint hidden" data-i18n="share.loginHint">ログインすると短い公開リンクを発行できます。</p>
+
+    <hr class="share-divider">
+
+    <!-- 編集できる共有リンク（18）: ログイン時のみ表示。未ログイン時は下の案内のみ -->
+    <div id="shareEditSection" class="share-edit-section hidden">
+      <label class="share-public-toggle-row">
+        <input type="checkbox" id="shareEditToggle">
+        <span data-i18n="share.editToggleLabel">✏️ 編集できるリンクを発行</span>
+      </label>
+      <p class="share-edit-warning" data-i18n="share.editWarning">⚠️ このリンクを知っている人は誰でも編集できます。</p>
+      <p class="share-edit-warning" data-i18n="share.editPrivateNote">🔒非公開の項目は含まれません。</p>
+      <p id="shareEditBadge" class="share-public-badge hidden" data-i18n="share.editBadge">✏️ 発行中</p>
+      <div id="shareEditUrlWrap" class="share-public-url-wrap hidden">
+        <textarea id="shareEditUrl" class="share-url" readonly rows="2"></textarea>
+        <button type="button" id="shareEditCopyBtn" class="btn btn-outline" data-i18n="share.copy">リンクをコピー</button>
+      </div>
+    </div>
+    <p id="shareEditLoginHint" class="share-login-hint hidden" data-i18n="share.editLoginHint">ログインすると編集できるリンクを発行できます。</p>
   </div>
 </div>
 

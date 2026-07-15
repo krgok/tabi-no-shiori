@@ -116,6 +116,32 @@ select {
   font-size: 0.78rem;
 }
 
+/* 編集できる共有リンク（18）: #e=<editId> 共同編集モードのヘッダーバナー。
+   viewOnly の閲覧バナーと同じレイアウトだが、色を変えて「編集可能」であることを区別する */
+.collab-banner {
+  position: sticky;
+  top: 0;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--pink-dark);
+  color: #fff;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.collab-badge {
+  font-weight: 700;
+}
+
+.collab-banner .btn {
+  padding: 4px 12px;
+  font-size: 0.78rem;
+}
+
 .header-title-row {
   display: flex;
   align-items: center;
@@ -1714,6 +1740,14 @@ select {
   padding: 8px 12px;
 }
 
+/* 編集できる共有リンク（18） */
+.share-edit-warning {
+  margin: 0 0 6px;
+  font-size: 0.76rem;
+  color: var(--warn);
+  opacity: 0.9;
+}
+
 .trips-list {
   display: flex;
   flex-direction: column;
@@ -1785,6 +1819,13 @@ select {
 
 /* 公開層と公開URL（16）: 公開中のしおりの控えめな地球アイコン */
 .trip-list-item-public {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  flex: none;
+}
+
+/* 編集できる共有リンク（18）: 編集リンク発行中のしおりの控えめな✏️アイコン */
+.trip-list-item-edit {
   font-size: 0.8rem;
   opacity: 0.85;
   flex: none;
@@ -2295,6 +2336,22 @@ body.view-only-mode .item-start-time-btn {
 body.view-only-mode .trip-title {
   cursor: default;
   border-color: transparent !important;
+}
+
+/* ===================== 編集できる共有リンク（18）: 共同編集モード =====================
+   body.collab-mode の間は、行程の編集そのものは view-only-mode と違って許可する（入力欄のreadOnly化はしない）。
+   非表示にするのは「自分のローカルしおり管理」に作用してしまうボタン類（しおり一覧・共有・
+   非公開🔒トグル各種）のみ。これらは getCurrentEntry() 等、collabMode 中は無関係な自分のしおりを
+   指してしまう関数に繋がるため、app.js 側のJSガードに加えてここでも到達不能にする（二重の防御）
+   =========================================================== */
+body.collab-mode #tripsBtn,
+body.collab-mode #shareBtn,
+body.collab-mode .day-priv-toggle,
+body.collab-mode .item-priv-toggle,
+body.collab-mode .item-note-priv-toggle,
+body.collab-mode .checklist-priv-toggle,
+body.collab-mode .checklist-list-priv-toggle {
+  display: none !important;
 }
 
 /* ===================== PDF出力（印刷 12） =====================

@@ -214,7 +214,18 @@
       "timeline.fixedStartBadgeTitle": "この時刻に固定されています（クリックで変更）",
       "timeline.fixedStartEditHint": "クリックして時刻を固定",
       "timeline.fixedStartClearAria": "固定を解除",
-      "timeline.fixedStartConflict": "⚠ 前の予定と重なっています"
+      "timeline.fixedStartConflict": "⚠ 前の予定と重なっています",
+      "share.editToggleLabel": "✏️ 編集できるリンクを発行",
+      "share.editWarning": "⚠️ このリンクを知っている人は誰でも編集できます。",
+      "share.editPrivateNote": "🔒非公開の項目は含まれません。",
+      "share.editBadge": "✏️ 発行中",
+      "share.editLoginHint": "ログインすると編集できるリンクを発行できます。",
+      "collab.tooLarge": "しおりのデータが大きすぎるため、共同編集用のリンクに反映できませんでした。",
+      "collab.stopped": "編集できるリンクを停止しました",
+      "collab.badge": "✏️ 共同編集中",
+      "collab.backToMine": "自分のしおりに戻る",
+      "collab.notFound": "このリンクは無効です",
+      "collab.revoked": "オーナーがこの編集リンクを停止しました"
     },
     en: {
       "header.share": "Share",
@@ -372,7 +383,18 @@
       "timeline.fixedStartBadgeTitle": "Fixed to this time (click to change)",
       "timeline.fixedStartEditHint": "Click to fix the time",
       "timeline.fixedStartClearAria": "Unfix",
-      "timeline.fixedStartConflict": "⚠ Overlaps with the previous plan"
+      "timeline.fixedStartConflict": "⚠ Overlaps with the previous plan",
+      "share.editToggleLabel": "✏️ Get an editable link",
+      "share.editWarning": "⚠️ Anyone with this link can edit this itinerary.",
+      "share.editPrivateNote": "🔒 Private items are not included.",
+      "share.editBadge": "✏️ Active",
+      "share.editLoginHint": "Sign in to get an editable link.",
+      "collab.tooLarge": "This itinerary is too large to sync to the editable link.",
+      "collab.stopped": "Editable link turned off",
+      "collab.badge": "✏️ Co-editing",
+      "collab.backToMine": "Back to my itinerary",
+      "collab.notFound": "This link is no longer valid",
+      "collab.revoked": "The owner turned off this editable link"
     },
     zh: {
       "header.share": "分享",
@@ -530,7 +552,18 @@
       "timeline.fixedStartBadgeTitle": "已固定为此时间（点击可修改）",
       "timeline.fixedStartEditHint": "点击固定时间",
       "timeline.fixedStartClearAria": "取消固定",
-      "timeline.fixedStartConflict": "⚠ 与上一项时间重叠"
+      "timeline.fixedStartConflict": "⚠ 与上一项时间重叠",
+      "share.editToggleLabel": "✏️ 生成可编辑链接",
+      "share.editWarning": "⚠️ 任何知道此链接的人都可以编辑此行程。",
+      "share.editPrivateNote": "🔒 不包含非公开项目。",
+      "share.editBadge": "✏️ 已启用",
+      "share.editLoginHint": "登录后即可生成可编辑链接。",
+      "collab.tooLarge": "行程数据过大，无法同步到可编辑链接。",
+      "collab.stopped": "已停用可编辑链接",
+      "collab.badge": "✏️ 协作编辑中",
+      "collab.backToMine": "返回我的行程",
+      "collab.notFound": "此链接已失效",
+      "collab.revoked": "所有者已停用此编辑链接"
     },
     th: {
       "header.share": "แชร์",
@@ -688,7 +721,18 @@
       "timeline.fixedStartBadgeTitle": "ตรึงเวลานี้ไว้แล้ว (คลิกเพื่อเปลี่ยน)",
       "timeline.fixedStartEditHint": "คลิกเพื่อตรึงเวลา",
       "timeline.fixedStartClearAria": "ยกเลิกการตรึงเวลา",
-      "timeline.fixedStartConflict": "⚠ เวลาซ้อนทับกับรายการก่อนหน้า"
+      "timeline.fixedStartConflict": "⚠ เวลาซ้อนทับกับรายการก่อนหน้า",
+      "share.editToggleLabel": "✏️ สร้างลิงก์ที่แก้ไขได้",
+      "share.editWarning": "⚠️ ทุกคนที่รู้ลิงก์นี้สามารถแก้ไขทริปนี้ได้",
+      "share.editPrivateNote": "🔒 ไม่รวมรายการที่ไม่เปิดเผย",
+      "share.editBadge": "✏️ เปิดใช้งานอยู่",
+      "share.editLoginHint": "เข้าสู่ระบบเพื่อสร้างลิงก์ที่แก้ไขได้",
+      "collab.tooLarge": "ข้อมูลทริปมีขนาดใหญ่เกินไปที่จะซิงก์กับลิงก์ที่แก้ไขได้",
+      "collab.stopped": "ปิดใช้งานลิงก์ที่แก้ไขได้แล้ว",
+      "collab.badge": "✏️ กำลังแก้ไขร่วมกัน",
+      "collab.backToMine": "กลับไปที่ทริปของฉัน",
+      "collab.notFound": "ลิงก์นี้ไม่ถูกต้องแล้ว",
+      "collab.revoked": "เจ้าของได้ปิดใช้งานลิงก์แก้ไขนี้แล้ว"
     }
   };
 

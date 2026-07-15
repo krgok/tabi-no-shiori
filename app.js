@@ -50,6 +50,11 @@
   var CLOUD_TRIPS_COLLECTION = "trips";
   // 公開層と公開URL（16）: 誰でも読める公開コピー用コレクション。ドキュメントIDはFirestore自動採番（publicId）
   var CLOUD_PUBLIC_TRIPS_COLLECTION = "publicTrips";
+  // 編集できる共有リンク（18）: ログイン不要で誰でも編集できるコレクション。ドキュメントIDはFirestore自動採番（editId＝合言葉）。
+  // Firestoreルール上 update は未認証でも通るが、ownerUid は変更不可・data は200KB未満の文字列という制約がある
+  var CLOUD_EDIT_TRIPS_COLLECTION = "editTrips";
+  // ルールの200KB制限（data.size() < 200000）に対し余裕を持たせた閾値。UTF-8バイト長で判定する
+  var EDIT_TRIP_MAX_BYTES = 190000;
   var CLOUD_SYNC_DEBOUNCE_MS = 2000;
   // 手段セレクトの値 -> Routes API travelMode（plane/other はAPI照会対象外）
   var MODE_TO_API_TRAVELMODE = {
@@ -117,6 +122,37 @@
   // true の間は saveState() が完全に no-op になり、ローカルストレージ・クラウドへの書き込みは一切発生しない。
   // trip 変数は一時的に「他人の公開コピー」を指すが、tripsStore/currentTripId は自分のローカルデータのまま変更しない
   var viewOnly = false;
+
+  /* =========================================================
+   * 編集できる共有リンク（18）
+   * #e=<editId> で起動したときの共同編集モード（collabMode）の状態。
+   * viewOnly とは独立（両立しない: ハッシュの接頭辞が排他のため同時に true にはならない）。
+   * collabMode 中は編集操作は通常どおり可能だが、ローカルストレージ・自分のクラウド（trips）には
+   * 一切書き込まない。代わりに editTrips/{editId} へデバウンス書き込みする（scheduleCollabPush）。
+   * ========================================================= */
+  // このタブ/セッションを識別するランダムID。editTrips への書き込み時に writerId として埋め込み、
+  // onSnapshot で自分自身の書き込みのエコーを受信したときに無視してループを防ぐ（オーナー側・共同編集側で共用）
+  var SESSION_WRITER_ID = genId() + genId();
+  var collabMode = false; // #e=<editId> で起動した共同編集モード中か
+  var collabEditId = null; // 共同編集中の editTrips ドキュメントID
+  var collabOwnerUid = null; // 受信した editTrips ドキュメントの ownerUid（push時にそのまま維持する必要がある）
+  var collabRevoked = false; // オーナーが編集リンクを停止した（ドキュメントが消えた）ことを検知したら true。以降 push しない
+  var collabPushTimer = null;
+  // 編集できる共有リンク（18）: 共同編集側でこれまでに適用済みの editTrips ドキュメントの生データ（JSON文字列）。
+  // checkCollabHash の get() と直後の subscribeCollabListener の onSnapshot初回コールバックは
+  // 同じ内容を二重に届けてくる（Firestoreの仕様上、onSnapshot登録直後に現在の状態が1回必ず飛んでくるため）。
+  // この初回コールバックが「get()直後〜購読確立までの間に行ったローカル編集」を巻き戻してしまう競合を防ぐため、
+  // 受信データがこの値と完全一致するときは何もしない（writerIdでの自己エコー判定と同じ目的の、内容ベースの判定）
+  var collabLastAppliedRaw = null;
+  // 編集できる共有リンク（18）: オーナー側のpull-sync・共同編集側のpull-syncの両方で共用する購読ハンドル。
+  // どちらか一方しか同時に有効にならない（オーナー側は viewOnly/collabMode でないときのみ、共同編集側は collabMode 中のみ）
+  var editListenerUnsub = null;
+  var editListenerEditId = null;
+  // pull（onSnapshotで受信したリモートの変更をローカルに反映する処理）の最中は、
+  // その反映自体が saveState() 経由で push を誘発しないようにするための抑止フラグ（ループ防止）
+  var applyingRemoteEditUpdate = false;
+  // 200KB超過（EDIT_TRIP_MAX_BYTES）のトーストは連続発生時に1回だけ出す
+  var editTripTooLargeShown = false;
 
   var el = {};
 
@@ -428,7 +464,16 @@
           // しおりのアーカイブ（11）: archived は trips エントリ側のフィールド（trip データ本体には含めない）
           // cloudId/updatedAt（15）も同様に trips エントリ側のフィールド
           // publicId（16）: 公開層に発行されたら Firestore の publicTrips ドキュメントID。未公開は null
-          return { id: e.id, data: e.data, archived: !!e.archived, cloudId: e.cloudId || null, updatedAt: e.updatedAt || 0, publicId: e.publicId || null };
+          // editId（18）: 編集できる共有リンクを発行していたら Firestore の editTrips ドキュメントID。未発行は null
+          return {
+            id: e.id,
+            data: e.data,
+            archived: !!e.archived,
+            cloudId: e.cloudId || null,
+            updatedAt: e.updatedAt || 0,
+            publicId: e.publicId || null,
+            editId: e.editId || null
+          };
         })
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(storeObj));
@@ -440,8 +485,16 @@
   // 通常の保存経路。ローカル保存は従来どおり即時。
   // ログイン中は、現在のしおりの変更をデバウンス（2秒）してクラウドにも書き込む（15）
   // 公開URL閲覧（16）: viewOnly 中は何もしない。読み取り専用モードでローカルデータを汚染しないための最重要ガード
+  // 編集できる共有リンク（18）: collabMode 中は localStorage・自分のクラウド（trips）のどちらにも一切触れず、
+  // 代わりに editTrips/{editId} へのデバウンス書き込み（scheduleCollabPush）を行う。
+  // ほぼ全ての編集操作の末尾がこの saveState() を呼ぶ設計のため、ここ1箇所の分岐だけで
+  // 「共同編集者の変更は editTrips に飛ばす／ローカルには残さない」を実現できる
   function saveState() {
     if (viewOnly) return;
+    if (collabMode) {
+      scheduleCollabPush();
+      return;
+    }
     var entry = getCurrentEntry();
     if (entry) entry.updatedAt = Date.now();
     persistLocalOnly();
@@ -468,7 +521,9 @@
             archived: !!entry.archived,
             cloudId: typeof entry.cloudId === "string" && entry.cloudId ? entry.cloudId : null,
             updatedAt: typeof entry.updatedAt === "number" && isFinite(entry.updatedAt) ? entry.updatedAt : 0,
-            publicId: typeof entry.publicId === "string" && entry.publicId ? entry.publicId : null
+            publicId: typeof entry.publicId === "string" && entry.publicId ? entry.publicId : null,
+            // 編集できる共有リンク（18）
+            editId: typeof entry.editId === "string" && entry.editId ? entry.editId : null
           };
         })
         .filter(Boolean);
@@ -505,7 +560,7 @@
       var parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.days)) {
         var id = genId();
-        result = { currentId: id, trips: [{ id: id, data: normalizeTrip(parsed), archived: false, cloudId: null, updatedAt: 0, publicId: null }] };
+        result = { currentId: id, trips: [{ id: id, data: normalizeTrip(parsed), archived: false, cloudId: null, updatedAt: 0, publicId: null, editId: null }] };
       }
     } catch (e) {
       /* 壊れたJSON: 移行データなしとして扱う（起動は壊さない） */
@@ -654,6 +709,9 @@
     }
     days.forEach(function (d) {
       var day = {
+        // 編集できる共有リンク（18）: マージ時のアンカー（「直前の日のid」）に使う安定id。
+        // 旧データ（この機能より前に作られたしおり）には無いため、無ければ発行する
+        id: typeof d.id === "string" && d.id ? d.id : genId(),
         date: typeof d.date === "string" ? d.date : "",
         startTime: typeof d.startTime === "string" && d.startTime ? d.startTime : "09:00",
         // 時差対応（13）: IANAタイムゾーン文字列。既定 ""＝時差計算なし。文字列のみ許容する防御的正規化
@@ -850,6 +908,184 @@
   }
 
   /* =========================================================
+   * 編集できる共有リンク（18）: 受信した公開用データ（非公開項目が抜けたもの）を
+   * オーナーの完全データへマージする純粋関数群（Firestore呼び出しを含まないため単体テスト可能）。
+   * 「アンカー方式」: どの非公開要素も、オーナーの現在の完全データ（ownerTrip）と、
+   * それを今この瞬間に sanitizeTripForPublic した結果（ownerPublic）を比較するだけで
+   * 「どれが非公開で隠れているか」「隠れている要素の直前にあった、共同編集者にも見えているはずの要素は何か」
+   * を都度再計算できる。そのため非公開要素の位置情報を別途永続化しておく必要はない
+   * （＝アンカーは公開データには一切含まれず、オーナー側のこの計算だけに存在する）。
+   * ========================================================= */
+
+  // fullList（オーナー視点の完全な配列。items配列 or days配列）のうち、
+  // survivingIdSet に id が含まれないもの（＝非公開で隠れている要素）を、
+  // 元の並び順のまま [{ item, afterId }] で返す。afterId は「直前の、隠れていない要素のid」
+  // （先頭から隠れている場合は null）。同じ afterId を持つ複数要素は元の相対順序を保つ
+  function computeHiddenWithAnchors(fullList, survivingIdSet) {
+    var hidden = [];
+    var lastSurvivingId = null;
+    (fullList || []).forEach(function (item) {
+      if (survivingIdSet[item.id]) {
+        lastSurvivingId = item.id;
+      } else {
+        hidden.push({ item: item, afterId: lastSurvivingId });
+      }
+    });
+    return hidden;
+  }
+
+  // computeHiddenWithAnchors が返した非公開要素を、baseList（共同編集者側の最新の並び）に
+  // アンカー位置で挿し戻す。afterId が null なら先頭、afterId が baseList に見当たらなければ
+  // （＝アンカーごと共同編集者に削除された）末尾に追加する。同じ挿入先が複数あっても元の順序を保つ
+  function insertByAnchor(baseList, hiddenEntries) {
+    var result = baseList.slice();
+    var insertedCountAfter = {};
+    (hiddenEntries || []).forEach(function (h) {
+      var key = h.afterId == null ? "__head__" : h.afterId;
+      var already = insertedCountAfter[key] || 0;
+      var idx;
+      if (h.afterId == null) {
+        idx = already;
+      } else {
+        var anchorIdx = result.findIndex(function (x) {
+          return x.id === h.afterId;
+        });
+        idx = anchorIdx === -1 ? result.length : anchorIdx + 1 + already;
+      }
+      result.splice(idx, 0, h.item);
+      insertedCountAfter[key] = already + 1;
+    });
+    return result;
+  }
+
+  // 1件のリスト（持ち物 or やること）をマージする。
+  // listPriv（リスト全体が非公開）なら共同編集者はこのリストを一切見ていない（常に空を受信する）ため、
+  // オーナーの元リストをそのまま保つ。そうでなければ要素単位の priv をアンカー方式で挿し戻す
+  function mergeChecklistList(ownerList, ownerPublicList, receivedList, listPriv) {
+    if (listPriv) {
+      return (ownerList || []).slice();
+    }
+    var publicIds = {};
+    (ownerPublicList || []).forEach(function (it) {
+      publicIds[it.id] = true;
+    });
+    var hidden = computeHiddenWithAnchors(ownerList, publicIds);
+    var visible = (receivedList || []).map(function (rit) {
+      var c = Object.assign({}, rit);
+      c.priv = false;
+      return c;
+    });
+    return insertByAnchor(visible, hidden);
+  }
+
+  // 1日分の items をマージする。ownerDay/ownerPublicDay は同じ日（id一致）のオーナー側完全データ／
+  // 今しがた計算した公開ビュー。receivedDay は共同編集者から届いた最新の日データ
+  function mergeDayItems(ownerDay, ownerPublicDay, receivedDay) {
+    var publicItemIds = {};
+    (ownerPublicDay.items || []).forEach(function (it) {
+      publicItemIds[it.id] = true;
+    });
+    var hiddenItems = computeHiddenWithAnchors(ownerDay.items, publicItemIds);
+
+    var ownerItemById = {};
+    (ownerDay.items || []).forEach(function (it) {
+      ownerItemById[it.id] = it;
+    });
+
+    var mergedVisibleItems = (receivedDay.items || []).map(function (rit) {
+      var ownerIt = ownerItemById[rit.id];
+      var merged = Object.assign({}, rit);
+      // 受信データは常に priv:false（sanitize済み）だが、念のため明示しておく
+      merged.priv = false;
+      // notePriv:true だった項目は、共同編集者には空メモしか見えていない。
+      // 受信の空メモで上書きせず、オーナーの元メモを保持する（notePriv フラグ自体も復元する）
+      if (ownerIt && ownerIt.notePriv) {
+        merged.notePriv = true;
+        merged.note = ownerIt.note;
+      } else {
+        merged.notePriv = false;
+      }
+      return merged;
+    });
+
+    var mergedItems = insertByAnchor(mergedVisibleItems, hiddenItems);
+
+    return {
+      id: ownerDay.id,
+      date: receivedDay.date,
+      startTime: receivedDay.startTime,
+      tz: receivedDay.tz,
+      priv: false,
+      dateManual: receivedDay.dateManual,
+      items: mergedItems
+    };
+  }
+
+  // 編集できる共有リンク（18）の中核: 共同編集者から届いた最新データ（receivedRaw、非公開項目が
+  // 抜けたもの）を、オーナーの完全データ（ownerTrip）へマージした結果を返す純粋関数。
+  // 引数はどちらも変更しない。戻り値は normalizeTrip 済みの新しい trip オブジェクト
+  function mergeRemoteEditIntoOwnerTrip(ownerTrip, receivedRaw) {
+    var received = normalizeTrip(receivedRaw);
+    // 「オーナーが今この完全データを共有したら共同編集者にはどう見えるはずか」を都度計算する。
+    // これと ownerTrip 自体を比較するだけで、非公開要素とそのアンカー（直前の可視要素）が求まる
+    var ownerPublic = sanitizeTripForPublic(ownerTrip);
+
+    var publicDayIds = {};
+    ownerPublic.days.forEach(function (d) {
+      publicDayIds[d.id] = true;
+    });
+    var hiddenDays = computeHiddenWithAnchors(ownerTrip.days, publicDayIds);
+
+    var ownerDayById = {};
+    ownerTrip.days.forEach(function (d) {
+      ownerDayById[d.id] = d;
+    });
+    var ownerPublicDayById = {};
+    ownerPublic.days.forEach(function (d) {
+      ownerPublicDayById[d.id] = d;
+    });
+
+    var mergedVisibleDays = received.days.map(function (rd) {
+      var ownerDay = ownerDayById[rd.id];
+      var ownerPublicDay = ownerPublicDayById[rd.id];
+      if (!ownerDay || !ownerPublicDay) {
+        // オーナー側に存在しない日＝共同編集者が新しく追加した日。そのまま採用する
+        return {
+          id: rd.id,
+          date: rd.date,
+          startTime: rd.startTime,
+          tz: rd.tz,
+          priv: false,
+          dateManual: rd.dateManual,
+          items: rd.items.map(function (it) {
+            var c = Object.assign({}, it);
+            c.priv = false;
+            c.notePriv = false;
+            return c;
+          })
+        };
+      }
+      return mergeDayItems(ownerDay, ownerPublicDay, rd);
+    });
+
+    var mergedDays = insertByAnchor(mergedVisibleDays, hiddenDays);
+
+    var merged = {
+      v: 1,
+      title: received.title,
+      titles: received.titles,
+      lang: received.lang,
+      days: mergedDays,
+      packing: mergeChecklistList(ownerTrip.packing, ownerPublic.packing, received.packing, !!ownerTrip.packingPriv),
+      todos: mergeChecklistList(ownerTrip.todos, ownerPublic.todos, received.todos, !!ownerTrip.todosPriv),
+      packingPriv: !!ownerTrip.packingPriv,
+      todosPriv: !!ownerTrip.todosPriv
+    };
+    // 受信データは他人（共同編集者）が作った可能性がある前提のため、最終結果も必ず normalizeTrip を通す
+    return normalizeTrip(merged);
+  }
+
+  /* =========================================================
    * Google ログイン＋Firestore クラウド保存（15、プライベート層）
    * 「本人だけが読める完全データ」を Firestore に保存する。公開層（publicTrips・公開URL）は次段階で実装する。
    * Firebase SDKが読み込めない・初期化に失敗した場合はここから先の関数が呼ばれても静かに何もせず、
@@ -926,8 +1162,10 @@
   }
 
   // 現在のしおりをデバウンス（2秒）してクラウドへ書き込む。ログインしていなければ何もしない
+  // 編集できる共有リンク（18）: collabMode 中は saveState() 側で既に迂回されているため通常ここには来ないが、
+  // 念のための多層ガードとして collabMode も見る
   function scheduleCloudSync() {
-    if (!authUser || !firebaseReady) return;
+    if (!authUser || !firebaseReady || collabMode) return;
     if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
     cloudSyncTimer = setTimeout(function () {
       cloudSyncTimer = null;
@@ -939,8 +1177,9 @@
   // trip 本体は JSON 文字列にして保存する（ネスト構造のまま入れると型制約で事故りやすいため）
   // 公開層と公開URL（16）: publicId も併せて書き込み、端末間で公開状態を引き継げるようにする。
   // 書き込み成功後、publicId を持つエントリなら公開コピー（publicTrips）もあわせて更新する（syncPublicCopyIfPublished）
+  // 編集できる共有リンク（18）: collabMode 中は自分の trips には一切書き込まない（多層ガード）
   function cloudUpsertEntry(entry) {
-    if (!firebaseReady || !fbDb || !authUser || !entry) return;
+    if (!firebaseReady || !fbDb || !authUser || !entry || collabMode) return;
     // 同じエントリの add（cloudId 採番）が実行中なら、完了を待ってから書き込み直す。
     // 待たずに進むと cloudId が未設定のまま再度 add され、クラウド上でしおりが重複する
     // （例: ログイン直後のマージによるアップロードが完了する前に公開トグルを押した場合）
@@ -958,7 +1197,9 @@
       archived: !!entry.archived,
       updatedAt: updatedAt,
       schema: 2,
-      publicId: entry.publicId || null
+      publicId: entry.publicId || null,
+      // 編集できる共有リンク（18）: editId も端末間で引き継ぐ
+      editId: entry.editId || null
     };
     if (entry.cloudId) {
       fbDb
@@ -969,6 +1210,7 @@
           entry.updatedAt = updatedAt;
           handleCloudSuccess();
           syncPublicCopyIfPublished(entry);
+          syncEditCopyIfEnabled(entry);
         })
         .catch(handleCloudError);
     } else {
@@ -982,6 +1224,7 @@
           if (el.tripsModal && !el.tripsModal.classList.contains("hidden")) renderTripsList();
           handleCloudSuccess();
           syncPublicCopyIfPublished(entry);
+          syncEditCopyIfEnabled(entry);
         })
         .catch(handleCloudError)
         .then(function () {
@@ -1014,6 +1257,45 @@
       .catch(handleCloudError);
   }
 
+  // JSON文字列のUTF-8バイト長を返す（Firestoreルールの data.size() 判定に合わせる）
+  function utf8ByteLength(str) {
+    return new TextEncoder().encode(str).length;
+  }
+
+  // 編集できる共有リンク（18）: entry.editId があるときだけ、共同編集用コピー（editTrips/{editId}）を
+  // サニタイズ済みデータで上書きする。syncPublicCopyIfPublished と同じ経路（cloudUpsertEntry 成功後）に
+  // 相乗りするため、オーナーがしおりを編集すれば自動的に共同編集用コピーにも反映される（push）。
+  // writerId には自セッションIDを入れる（共同編集者側の onSnapshot が自分自身の書き込みを無視できるように）
+  function syncEditCopyIfEnabled(entry) {
+    if (!entry || !entry.editId || !firebaseReady || !fbDb || !authUser) return;
+    var sanitized = sanitizeTripForPublic(entry.data);
+    var json = JSON.stringify(sanitized);
+    if (utf8ByteLength(json) >= EDIT_TRIP_MAX_BYTES) {
+      if (!editTripTooLargeShown) {
+        editTripTooLargeShown = true;
+        showToast(t("collab.tooLarge"), "error");
+      }
+      return;
+    }
+    editTripTooLargeShown = false;
+    fbDb
+      .collection(CLOUD_EDIT_TRIPS_COLLECTION)
+      .doc(entry.editId)
+      .set(
+        {
+          ownerUid: authUser.uid,
+          data: json,
+          title: tripDisplayTitle(entry.data) || "",
+          updatedAt: Date.now(),
+          writerId: SESSION_WRITER_ID,
+          schema: 2
+        },
+        { merge: true }
+      )
+      .then(handleCloudSuccess)
+      .catch(handleCloudError);
+  }
+
   // 1件の trips エントリを Firestore から削除する（cloudId が無ければ何もしない）
   function cloudDeleteEntry(entry) {
     if (!firebaseReady || !fbDb || !authUser || !entry || !entry.cloudId) return;
@@ -1035,7 +1317,7 @@
   // 既存の publicId があれば（多くはここには来ないが念のため）上書き更新する。
   // 成功後は publicId をローカル・プライベート層（trips/{cloudId}）の両方へ保存する
   function publishCurrentTrip(onDone) {
-    if (viewOnly || !authUser || !firebaseReady || !fbDb) return;
+    if (viewOnly || collabMode || !authUser || !firebaseReady || !fbDb) return;
     var entry = getCurrentEntry();
     if (!entry) return;
     var sanitized = sanitizeTripForPublic(entry.data);
@@ -1073,7 +1355,7 @@
   // 共有モーダルの「🌐 公開する」トグルOFF。publicTrips のドキュメントを削除し、
   // ローカル・プライベート層両方の publicId を null に戻す
   function unpublishCurrentTrip(onDone) {
-    if (viewOnly || !authUser || !firebaseReady || !fbDb) return;
+    if (viewOnly || collabMode || !authUser || !firebaseReady || !fbDb) return;
     var entry = getCurrentEntry();
     if (!entry || !entry.publicId) return;
     var publicIdToDelete = entry.publicId;
@@ -1087,6 +1369,89 @@
         cloudUpsertEntry(entry);
         handleCloudSuccess();
         showToast(t("share.unpublished"));
+        if (typeof onDone === "function") onDone(true);
+      })
+      .catch(function (err) {
+        handleCloudError(err);
+        if (typeof onDone === "function") onDone(false);
+      });
+  }
+
+  /* =========================================================
+   * 編集できる共有リンク（18）: オーナー側の発行/停止
+   * publishCurrentTrip / unpublishCurrentTrip（16）と対をなす実装。
+   * viewOnly・collabMode のいずれの最中も呼ばれてはならない
+   * （collabMode 中は getCurrentEntry() が別人のしおりを指しかねないため）
+   * ========================================================= */
+
+  // 共有モーダルの「✏️ 編集できるリンクを発行」トグルON。新規発行なら editTrips に自動IDで作成し、
+  // editId をローカル・プライベート層（trips/{cloudId}）の両方へ保存する
+  function publishEditLink(onDone) {
+    if (viewOnly || collabMode || !authUser || !firebaseReady || !fbDb) return;
+    var entry = getCurrentEntry();
+    if (!entry) return;
+    var sanitized = sanitizeTripForPublic(entry.data);
+    var json = JSON.stringify(sanitized);
+    if (utf8ByteLength(json) >= EDIT_TRIP_MAX_BYTES) {
+      showToast(t("collab.tooLarge"), "error");
+      if (typeof onDone === "function") onDone(false);
+      return;
+    }
+    var payload = {
+      ownerUid: authUser.uid,
+      data: json,
+      title: tripDisplayTitle(entry.data) || "",
+      updatedAt: Date.now(),
+      writerId: SESSION_WRITER_ID,
+      schema: 2
+    };
+    var ref = entry.editId
+      ? fbDb
+          .collection(CLOUD_EDIT_TRIPS_COLLECTION)
+          .doc(entry.editId)
+          .set(payload, { merge: true })
+          .then(function () {
+            return entry.editId;
+          })
+      : fbDb
+          .collection(CLOUD_EDIT_TRIPS_COLLECTION)
+          .add(payload)
+          .then(function (docRef) {
+            return docRef.id;
+          });
+    ref
+      .then(function (editId) {
+        entry.editId = editId;
+        persistLocalOnly();
+        cloudUpsertEntry(entry); // editId をプライベート層（trips/{cloudId}）にも即時反映する
+        syncEditListenerForCurrentTrip();
+        handleCloudSuccess();
+        if (typeof onDone === "function") onDone(true);
+      })
+      .catch(function (err) {
+        handleCloudError(err);
+        if (typeof onDone === "function") onDone(false);
+      });
+  }
+
+  // 共有モーダルの「✏️ 編集できるリンクを発行」トグルOFF。editTrips のドキュメントを削除し、
+  // ローカル・プライベート層両方の editId を null に戻す
+  function unpublishEditLink(onDone) {
+    if (viewOnly || collabMode || !authUser || !firebaseReady || !fbDb) return;
+    var entry = getCurrentEntry();
+    if (!entry || !entry.editId) return;
+    var editIdToDelete = entry.editId;
+    fbDb
+      .collection(CLOUD_EDIT_TRIPS_COLLECTION)
+      .doc(editIdToDelete)
+      .delete()
+      .then(function () {
+        entry.editId = null;
+        persistLocalOnly();
+        cloudUpsertEntry(entry);
+        syncEditListenerForCurrentTrip();
+        handleCloudSuccess();
+        showToast(t("collab.stopped"));
         if (typeof onDone === "function") onDone(true);
       })
       .catch(function (err) {
@@ -1148,12 +1513,15 @@
       if (parsed) {
         u.entry.data = normalizeTrip(parsed);
         // 公開URL閲覧（16）: viewOnly 中は trip が他人の公開コピーを指しているため上書きしない
-        if (!viewOnly && u.entry.id === currentTripId) trip = u.entry.data;
+        // 編集できる共有リンク（18）: collabMode 中も同様に trip は共同編集中の他人のしおりを指すため上書きしない
+        if (!viewOnly && !collabMode && u.entry.id === currentTripId) trip = u.entry.data;
       }
       u.entry.archived = !!u.cloudDoc.archived;
       u.entry.updatedAt = u.cloudDoc.updatedAt || 0;
       // 公開層と公開URL（16）: publicId も端末間で引き継ぐ
       u.entry.publicId = u.cloudDoc.publicId || null;
+      // 編集できる共有リンク（18）: editId も端末間で引き継ぐ
+      u.entry.editId = u.cloudDoc.editId || null;
     });
 
     plan.newLocalEntries.forEach(function (doc) {
@@ -1164,12 +1532,14 @@
         archived: !!doc.archived,
         cloudId: doc.id,
         updatedAt: doc.updatedAt || 0,
-        publicId: doc.publicId || null
+        publicId: doc.publicId || null,
+        editId: doc.editId || null
       });
     });
 
     persistLocalOnly();
     render();
+    syncEditListenerForCurrentTrip();
 
     plan.uploads.forEach(function (entry) {
       cloudUpsertEntry(entry);
@@ -1182,8 +1552,10 @@
   }
 
   // ログイン直後に1回だけ実行する、クラウドとローカルの突き合わせ処理
+  // 編集できる共有リンク（18）: collabMode 中はゲスト自身のアカウントの trips には一切触れない
+  // （「ログイン/クラウド同期系は collabMode で無効化」）。exitCollabMode() で通常モードに戻った際に再実行する
   function runCloudMerge() {
-    if (!firebaseReady || !fbDb || !authUser || cloudMergeInProgress) return;
+    if (!firebaseReady || !fbDb || !authUser || cloudMergeInProgress || collabMode) return;
     cloudMergeInProgress = true;
     fbDb
       .collection(CLOUD_TRIPS_COLLECTION)
@@ -1198,7 +1570,8 @@
             data: typeof d.data === "string" ? d.data : "",
             archived: !!d.archived,
             updatedAt: typeof d.updatedAt === "number" && isFinite(d.updatedAt) ? d.updatedAt : 0,
-            publicId: typeof d.publicId === "string" && d.publicId ? d.publicId : null
+            publicId: typeof d.publicId === "string" && d.publicId ? d.publicId : null,
+            editId: typeof d.editId === "string" && d.editId ? d.editId : null
           });
         });
         var plan = computeTripsMergePlan(tripsStore, cloudDocs);
@@ -1262,7 +1635,7 @@
       title: "東京旅行",
       titles: Object.assign({}, window.I18N.SAMPLE_TRIP_TITLES),
       lang: "ja",
-      days: [{ date: "2026-07-20", startTime: "09:00", tz: "", priv: false, dateManual: false, items: items }],
+      days: [{ id: genId(), date: "2026-07-20", startTime: "09:00", tz: "", priv: false, dateManual: false, items: items }],
       packing: [],
       todos: [],
       packingPriv: false,
@@ -1277,7 +1650,7 @@
       title: window.I18N.NEW_TRIP_TITLES.ja,
       titles: Object.assign({}, window.I18N.NEW_TRIP_TITLES),
       lang: lang(),
-      days: [{ date: "", startTime: "09:00", tz: "", priv: false, dateManual: false, items: [] }],
+      days: [{ id: genId(), date: "", startTime: "09:00", tz: "", priv: false, dateManual: false, items: [] }],
       packing: [],
       todos: [],
       packingPriv: false,
@@ -1375,9 +1748,22 @@
     el.sharePublicCopyBtn = document.getElementById("sharePublicCopyBtn");
     el.shareLoginHint = document.getElementById("shareLoginHint");
 
+    // 編集できる共有リンク（18）: 共有モーダルの「✏️ 編集できるリンクを発行」セクション（ログイン時のみ）
+    el.shareEditSection = document.getElementById("shareEditSection");
+    el.shareEditToggle = document.getElementById("shareEditToggle");
+    el.shareEditBadge = document.getElementById("shareEditBadge");
+    el.shareEditUrlWrap = document.getElementById("shareEditUrlWrap");
+    el.shareEditUrl = document.getElementById("shareEditUrl");
+    el.shareEditCopyBtn = document.getElementById("shareEditCopyBtn");
+    el.shareEditLoginHint = document.getElementById("shareEditLoginHint");
+
     // 公開層と公開URL（16）: #p=<publicId> 読み取り専用モードのヘッダー表示
     el.viewOnlyBanner = document.getElementById("viewOnlyBanner");
     el.viewOnlyBackBtn = document.getElementById("viewOnlyBackBtn");
+
+    // 編集できる共有リンク（18）: #e=<editId> 共同編集モードのヘッダー表示
+    el.collabBanner = document.getElementById("collabBanner");
+    el.collabBackBtn = document.getElementById("collabBackBtn");
 
     el.textioModal = document.getElementById("textioModal");
     el.textioArea = document.getElementById("textioArea");
@@ -1437,6 +1823,7 @@
     window.I18N.applyLanguage(lang());
     applyExtraI18n();
     applyViewOnlyUI();
+    applyCollabModeUI();
 
     renderHeader();
     renderDayTabs();
@@ -1489,6 +1876,15 @@
     if (el.textioLoadBtn) el.textioLoadBtn.disabled = viewOnly;
     if (el.textioOpenFileBtn) el.textioOpenFileBtn.disabled = viewOnly;
     if (el.textioFileInput) el.textioFileInput.disabled = viewOnly;
+  }
+
+  // 編集できる共有リンク（18）: 共同編集モードの共通UI（バナー表示・しおり一覧/共有ボタン等の非表示）。
+  // viewOnly と異なり編集操作自体は許可するため、入力欄の readOnly/disabled 化は行わない。
+  // 「しおり一覧」「共有」「🔒非公開トグル」類は自分のしおりではないデータに作用してしまうため
+  // body.collab-mode スコープのCSSで非表示にする（styles.css参照）
+  function applyCollabModeUI() {
+    document.body.classList.toggle("collab-mode", collabMode);
+    if (el.collabBanner) el.collabBanner.classList.toggle("hidden", !collabMode);
   }
 
   function renderHeader() {
@@ -4210,6 +4606,16 @@
       item.appendChild(publicBadge);
     }
 
+    // 編集できる共有リンク（18）: 発行中のしおりに✏️バッジを表示する
+    if (entry.editId) {
+      var editBadge = document.createElement("span");
+      editBadge.className = "trip-list-item-edit";
+      editBadge.textContent = "✏️";
+      editBadge.title = t("share.editBadge");
+      editBadge.setAttribute("aria-label", t("share.editBadge"));
+      item.appendChild(editBadge);
+    }
+
     var archiveBtn = document.createElement("button");
     archiveBtn.type = "button";
     archiveBtn.className = "trip-list-item-archive";
@@ -4269,16 +4675,16 @@
   }
 
   function openTripsModal() {
-    // 公開URL閲覧（16）: しおり一覧はローカルの自分のしおりを扱うため、閲覧モード中は開かない
-    // （ヘッダーの tripsBtn 自体も非表示にしているが、念のための二重ガード）
-    if (viewOnly) return;
+    // 公開URL閲覧（16）・編集できる共有リンク（18）: しおり一覧はローカルの自分のしおりを扱うため、
+    // 閲覧モード中／共同編集モード中は開かない（ヘッダーの tripsBtn 自体も非表示にしているが、念のための二重ガード）
+    if (viewOnly || collabMode) return;
     tripsArchivedOpen = false;
     renderTripsList();
     openModal(el.tripsModal);
   }
 
   function switchTrip(id) {
-    if (viewOnly) return;
+    if (viewOnly || collabMode) return;
     if (id === currentTripId) {
       closeModal(el.tripsModal);
       return;
@@ -4293,24 +4699,26 @@
     saveState();
     closeModal(el.tripsModal);
     render();
+    syncEditListenerForCurrentTrip();
   }
 
   function createNewTrip() {
-    if (viewOnly) return;
+    if (viewOnly || collabMode) return;
     var data = normalizeTrip(createBlankTripData());
     var id = genId();
-    tripsStore.push({ id: id, data: data, archived: false, cloudId: null, updatedAt: Date.now(), publicId: null });
+    tripsStore.push({ id: id, data: data, archived: false, cloudId: null, updatedAt: Date.now(), publicId: null, editId: null });
     currentTripId = id;
     trip = data;
     currentDayIndex = 0;
     saveState();
     closeModal(el.tripsModal);
     render();
+    syncEditListenerForCurrentTrip();
   }
 
   // 「アーカイブされていないしおりが1つだけのとき、そのしおりは削除不可」（11で「最後の1つは削除不可」ガードを整合）
   function requestDeleteTrip(id) {
-    if (viewOnly) return;
+    if (viewOnly || collabMode) return;
     var entry = tripsStore.find(function (e) {
       return e.id === id;
     });
@@ -4331,6 +4739,11 @@
       tripsStore.splice(idx, 1);
       // Google ログイン＋Firestore クラウド保存（15）: クラウド同期済みなら文書も削除する
       cloudDeleteEntry(entry);
+      // 編集できる共有リンク（18）: 発行中のまま削除された場合は editTrips 側も削除する
+      if (entry.editId && authUser && firebaseReady && fbDb) {
+        fbDb.collection(CLOUD_EDIT_TRIPS_COLLECTION).doc(entry.editId).delete().catch(function () {});
+      }
+      var switched = false;
       if (currentTripId === id) {
         // アーカイブされていないしおりを優先して切り替え先にする
         var nextEntry =
@@ -4340,9 +4753,11 @@
         currentTripId = nextEntry.id;
         trip = nextEntry.data;
         currentDayIndex = 0;
+        switched = true;
       }
       saveState();
       render();
+      if (switched) syncEditListenerForCurrentTrip();
       if (!el.tripsModal.classList.contains("hidden")) renderTripsList();
     });
   }
@@ -4350,7 +4765,7 @@
   // しおりのアーカイブ（11）: 確認ダイアログ不要。現在編集中のしおりをアーカイブする場合は
   // アーカイブされていない他のしおりへ自動的に切り替える。他に無ければアーカイブ不可
   function requestArchiveTrip(id) {
-    if (viewOnly) return;
+    if (viewOnly || collabMode) return;
     var entry = tripsStore.find(function (e) {
       return e.id === id;
     });
@@ -4373,6 +4788,7 @@
       // クラウド同期の対象にしないため、アーカイブしたしおり自体は明示的に反映する
       cloudUpsertEntry(entry);
       render();
+      syncEditListenerForCurrentTrip();
       renderTripsList();
       showToast(t("trips.archived"));
       return;
@@ -4386,7 +4802,7 @@
   }
 
   function unarchiveTrip(id) {
-    if (viewOnly) return;
+    if (viewOnly || collabMode) return;
     var entry = tripsStore.find(function (e) {
       return e.id === id;
     });
@@ -4448,7 +4864,9 @@
   }
 
   function openShareModal() {
-    if (viewOnly) return;
+    // 編集できる共有リンク（18）: collabMode 中は共有モーダルを開かない（自分のしおりではないため。
+    // getCurrentEntry() が別人のローカルしおりを指しかねない多層ガード）
+    if (viewOnly || collabMode) return;
     // 非公開マークと公開用データ（14）: 共有リンクに埋め込むのは trip 全体そのままではなく、
     // sanitizeTripForPublic の結果（priv/notePriv を反映した公開コピー）にする。
     // これにより非公開マークを付けた部分は共有リンクを渡しても見えなくなる
@@ -4458,6 +4876,7 @@
     var url = window.location.origin + window.location.pathname + "#d=" + encoded;
     el.shareUrl.value = url;
     renderShareModalPublicSection();
+    renderShareModalEditSection();
     openModal(el.shareModal);
   }
 
@@ -4494,7 +4913,7 @@
 
   // 共有モーダルの「🌐 公開する」トグル操作。二重送信防止のため通信中はトグルを一時的に無効化する
   function onSharePublicToggleChange() {
-    if (viewOnly || !authUser || !firebaseReady) return;
+    if (viewOnly || collabMode || !authUser || !firebaseReady) return;
     var wantOn = el.sharePublicToggle.checked;
     el.sharePublicToggle.disabled = true;
     var onDone = function () {
@@ -4506,6 +4925,48 @@
       publishCurrentTrip(onDone);
     } else {
       unpublishCurrentTrip(onDone);
+    }
+  }
+
+  // 編集できる共有リンク（18）: 共有モーダルの「✏️ 編集できるリンクを発行」セクションを、
+  // 現在の authUser / editId に合わせて更新する。未ログイン時は案内のみ表示する
+  function renderShareModalEditSection() {
+    if (!el.shareEditSection) return;
+    if (!authUser || !firebaseReady) {
+      el.shareEditSection.classList.add("hidden");
+      if (el.shareEditLoginHint) el.shareEditLoginHint.classList.remove("hidden");
+      return;
+    }
+    if (el.shareEditLoginHint) el.shareEditLoginHint.classList.add("hidden");
+    el.shareEditSection.classList.remove("hidden");
+
+    var entry = getCurrentEntry();
+    var isEnabled = !!(entry && entry.editId);
+    el.shareEditToggle.checked = isEnabled;
+    el.shareEditBadge.classList.toggle("hidden", !isEnabled);
+    el.shareEditUrlWrap.classList.toggle("hidden", !isEnabled);
+
+    if (isEnabled) {
+      var url = window.location.origin + window.location.pathname + "#e=" + encodeURIComponent(entry.editId);
+      el.shareEditUrl.value = url;
+    }
+  }
+
+  // 編集できる共有リンク（18）: 共有モーダルの「✏️ 編集できるリンクを発行」トグル操作。
+  // 二重送信防止のため通信中はトグルを一時的に無効化する
+  function onShareEditToggleChange() {
+    if (viewOnly || collabMode || !authUser || !firebaseReady) return;
+    var wantOn = el.shareEditToggle.checked;
+    el.shareEditToggle.disabled = true;
+    var onDone = function () {
+      el.shareEditToggle.disabled = false;
+      renderShareModalEditSection();
+      if (el.tripsModal && !el.tripsModal.classList.contains("hidden")) renderTripsList();
+    };
+    if (wantOn) {
+      publishEditLink(onDone);
+    } else {
+      unpublishEditLink(onDone);
     }
   }
 
@@ -4559,7 +5020,7 @@
       // しおりのアーカイブ（11）: 共有リンクで追加されるしおりは archived: false
       var data = normalizeTrip(parsed);
       var id = genId();
-      tripsStore.push({ id: id, data: data, archived: false, cloudId: null, updatedAt: 0, publicId: null });
+      tripsStore.push({ id: id, data: data, archived: false, cloudId: null, updatedAt: 0, publicId: null, editId: null });
       currentTripId = id;
       trip = data;
       currentDayIndex = 0;
@@ -4635,6 +5096,243 @@
       history.replaceState(null, "", window.location.pathname + window.location.search);
     }
     render();
+  }
+
+  /* =========================================================
+   * 編集できる共有リンク（18）: #e=<editId> の共同編集（ログイン不要・双方向リアルタイム同期）
+   * ========================================================= */
+
+  // editTrips/{editId} の購読を解除する。オーナー側のpull-sync・共同編集側のpull-syncの両方で共用するため、
+  // どちらの用途で張った購読でも安全に解除できる
+  function unsubscribeEditListener() {
+    if (editListenerUnsub) {
+      try {
+        editListenerUnsub();
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    editListenerUnsub = null;
+    editListenerEditId = null;
+  }
+
+  // オーナー側: 現在のしおり（currentTripId のエントリ）が editId を持つときだけ editTrips/{editId} を購読する。
+  // しおり切替のたびに呼び直すことで、以前の購読を確実に解除してから必要なら新しい購読を張る。
+  // viewOnly・collabMode 中は（自分のしおりを見ていない、または他人のしおりを編集中のため）購読しない
+  function syncEditListenerForCurrentTrip() {
+    if (viewOnly || collabMode) {
+      unsubscribeEditListener();
+      return;
+    }
+    var entry = getCurrentEntry();
+    var editId = entry && entry.editId ? entry.editId : null;
+    if (editListenerEditId === editId) return; // 変化なし（同じ購読を維持、またはどちらも未発行）
+    unsubscribeEditListener();
+    if (!editId || !firebaseReady || !fbDb) return;
+    editListenerEditId = editId;
+    editListenerUnsub = fbDb
+      .collection(CLOUD_EDIT_TRIPS_COLLECTION)
+      .doc(editId)
+      .onSnapshot(function (doc) {
+        handleOwnerEditSnapshot(editId, doc);
+      }, handleCloudError);
+  }
+
+  // オーナー側のpull-sync本体。共同編集者からの更新を受信し、非公開項目を失わずにマージして反映する
+  function handleOwnerEditSnapshot(editId, doc) {
+    if (viewOnly || collabMode) return;
+    // 購読が既に別の editId に切り替わった後に届いた古いコールバックは無視する
+    if (editListenerEditId !== editId) return;
+    var entry = tripsStore.find(function (e) {
+      return e.editId === editId;
+    });
+    if (!entry) return; // ローカルからこの編集リンクの対応関係を見失っている（念のためのガード）
+    if (!doc || !doc.exists) return; // 自分で停止した直後の残響など。何もしない
+    var d = doc.data() || {};
+    if (d.writerId === SESSION_WRITER_ID) return; // 自分自身の書き込みのエコーは無視（ループ防止）
+    var parsed = safeParseTripJSON(d.data);
+    if (!parsed || !Array.isArray(parsed.days)) return;
+
+    applyingRemoteEditUpdate = true;
+    try {
+      entry.data = mergeRemoteEditIntoOwnerTrip(entry.data, parsed);
+      if (entry.id === currentTripId) {
+        trip = entry.data;
+        if (currentDayIndex >= trip.days.length) currentDayIndex = Math.max(0, trip.days.length - 1);
+      }
+      // マージ適用自体が editTrips への push を誘発しないよう、saveState() ではなく
+      // persistLocalOnly() を直接呼ぶ（scheduleCloudSync/scheduleCollabPush のどちらも起動しない）
+      persistLocalOnly();
+      render();
+    } finally {
+      applyingRemoteEditUpdate = false;
+    }
+  }
+
+  // 共同編集側（collabMode）: 現在編集中のデータをデバウンス（2秒）して editTrips/{editId} へ書き込む
+  function scheduleCollabPush() {
+    if (!collabMode || !collabEditId || collabRevoked) return;
+    if (collabPushTimer) clearTimeout(collabPushTimer);
+    collabPushTimer = setTimeout(function () {
+      collabPushTimer = null;
+      pushCollabEdit();
+    }, CLOUD_SYNC_DEBOUNCE_MS);
+  }
+
+  function pushCollabEdit() {
+    if (!collabMode || !collabEditId || !firebaseReady || !fbDb || collabRevoked) return;
+    var sanitized = sanitizeTripForPublic(trip);
+    var json = JSON.stringify(sanitized);
+    if (utf8ByteLength(json) >= EDIT_TRIP_MAX_BYTES) {
+      if (!editTripTooLargeShown) {
+        editTripTooLargeShown = true;
+        showToast(t("collab.tooLarge"), "error");
+      }
+      return;
+    }
+    editTripTooLargeShown = false;
+    fbDb
+      .collection(CLOUD_EDIT_TRIPS_COLLECTION)
+      .doc(collabEditId)
+      .set(
+        {
+          // Firestoreルール上 ownerUid は変更不可のため、受信時に控えておいた値をそのまま送り返す
+          ownerUid: collabOwnerUid,
+          data: json,
+          title: tripDisplayTitle(trip) || "",
+          updatedAt: Date.now(),
+          writerId: SESSION_WRITER_ID,
+          schema: 2
+        },
+        { merge: true }
+      )
+      .then(handleCloudSuccess)
+      .catch(handleCloudError);
+  }
+
+  // 共同編集側のpull-sync本体。オーナーや他の共同編集者からの更新を受信する。
+  // 共同編集側のローカルコピーはもともとサニタイズ済みデータそのもの（非公開項目を一切持たない）なので、
+  // オーナー側のような「非公開項目を守るマージ」は不要で、常に受信データへの全置換でよい
+  function subscribeCollabListener(editId) {
+    unsubscribeEditListener();
+    editListenerEditId = editId;
+    editListenerUnsub = fbDb
+      .collection(CLOUD_EDIT_TRIPS_COLLECTION)
+      .doc(editId)
+      .onSnapshot(function (doc) {
+        if (!doc || !doc.exists) {
+          // オーナーが編集リンクを停止した（ドキュメントが削除された）
+          if (!collabRevoked) {
+            collabRevoked = true;
+            showToast(t("collab.revoked"), "error");
+          }
+          return;
+        }
+        var d = doc.data() || {};
+        if (d.writerId === SESSION_WRITER_ID) return; // 自分自身の書き込みのエコーは無視（ループ防止）
+        // onSnapshot登録直後には（Firestoreの仕様上）現在の状態が1回必ず届く。これは checkCollabHash の
+        // get() で取得済みの内容と同一のことが多く、その間にローカルで編集していた場合に上書きしてしまう
+        // 競合を避けるため、既に適用済みの生データと完全一致するなら何もしない
+        if (typeof d.data === "string" && d.data === collabLastAppliedRaw) return;
+        var parsed = safeParseTripJSON(d.data);
+        if (!parsed || !Array.isArray(parsed.days)) return;
+        // 受信データは他人（オーナーや他の共同編集者）が作った可能性がある前提のため、必ず normalizeTrip を通す
+        applyingRemoteEditUpdate = true;
+        try {
+          trip = normalizeTrip(parsed);
+          collabLastAppliedRaw = d.data;
+          if (currentDayIndex >= trip.days.length) currentDayIndex = Math.max(0, trip.days.length - 1);
+          render();
+        } finally {
+          applyingRemoteEditUpdate = false;
+        }
+      }, handleCloudError);
+  }
+
+  // #e=<editId> があれば共同編集モードで起動する。ログイン不要・localStorageは一切変更しない。
+  // ハッシュを検出した時点で同期的に collabMode=true にすることで、この後に呼ばれる init() 末尾の
+  // saveState() を含め、以降のローカル保存処理を確実に無効化してからFirestoreへの非同期取得を行う
+  // （viewOnly の checkPublicHash と同じ実装方針）
+  function checkCollabHash() {
+    var hash = window.location.hash;
+    if (!hash || hash.indexOf("#e=") !== 0) return;
+    var editId = decodeURIComponent(hash.slice(3));
+    if (!editId) return;
+
+    collabMode = true;
+    render();
+
+    if (!firebaseReady || !fbDb) {
+      finishCollabHashFallback();
+      return;
+    }
+
+    fbDb
+      .collection(CLOUD_EDIT_TRIPS_COLLECTION)
+      .doc(editId)
+      .get()
+      .then(function (doc) {
+        if (!doc || !doc.exists) {
+          finishCollabHashFallback();
+          return;
+        }
+        var d = doc.data() || {};
+        var parsed = safeParseTripJSON(d.data);
+        if (!parsed || !Array.isArray(parsed.days)) {
+          finishCollabHashFallback();
+          return;
+        }
+        collabEditId = editId;
+        collabOwnerUid = typeof d.ownerUid === "string" ? d.ownerUid : null;
+        trip = normalizeTrip(parsed);
+        // subscribeCollabListener の onSnapshot 初回コールバックが同じ内容を再度届けてきても
+        // 上書きしないよう、ここで適用済みとして記録しておく（上のコメント参照）
+        collabLastAppliedRaw = typeof d.data === "string" ? d.data : null;
+        currentDayIndex = 0;
+        render();
+        subscribeCollabListener(editId);
+      })
+      .catch(function () {
+        finishCollabHashFallback();
+      });
+  }
+
+  // 編集リンクの取得に失敗した（存在しない・削除済み・データ破損・オフライン等）場合のフォールバック。
+  // 通常モードで起動し直す。ハッシュを消して再読み込み時の再取得ループを防ぐ（finishPublicHashFallback と同じ方針）
+  function finishCollabHashFallback() {
+    collabMode = false;
+    collabEditId = null;
+    collabOwnerUid = null;
+    collabLastAppliedRaw = null;
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+    showToast(t("collab.notFound"), "error");
+    render();
+    // init() 末尾の saveState() は collabMode=true の間スキップされているため、
+    // 起動時の移行・正規化結果の永続化をここで肩代わりする
+    saveState();
+  }
+
+  // ヘッダーの「自分のしおりに戻る」ボタン。collabMode を解除し、ローカルの現在のしおりの表示に戻す
+  function exitCollabMode() {
+    if (!collabMode) return;
+    unsubscribeEditListener();
+    if (collabPushTimer) {
+      clearTimeout(collabPushTimer);
+      collabPushTimer = null;
+    }
+    collabMode = false;
+    collabEditId = null;
+    collabOwnerUid = null;
+    collabRevoked = false;
+    collabLastAppliedRaw = null;
+    trip = getCurrentEntry().data;
+    currentDayIndex = 0;
+    if (window.location.hash) {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+    render();
+    // collabMode 中は runCloudMerge() を無効化していたため、ログイン済みなら通常モード復帰時に再開する
+    if (authUser) runCloudMerge();
   }
 
   /* =========================================================
@@ -5374,7 +6072,7 @@
 
     el.addDayBtn.addEventListener("click", function () {
       if (viewOnly) return;
-      trip.days.push({ date: "", startTime: "09:00", tz: "", priv: false, dateManual: false, items: [] });
+      trip.days.push({ id: genId(), date: "", startTime: "09:00", tz: "", priv: false, dateManual: false, items: [] });
       currentDayIndex = trip.days.length - 1;
       // 日付の自動連番（2）: 新しい日は既定 dateManual:false のため、直前の日の日付+1日で自動的に埋まる
       recalcAutoDates();
@@ -5599,6 +6297,16 @@
     }
     if (el.viewOnlyBackBtn) el.viewOnlyBackBtn.addEventListener("click", exitViewOnlyMode);
 
+    // 編集できる共有リンク（18）
+    if (el.shareEditToggle) el.shareEditToggle.addEventListener("change", onShareEditToggleChange);
+    if (el.shareEditCopyBtn) {
+      el.shareEditCopyBtn.addEventListener("click", function () {
+        copyToClipboard(el.shareEditUrl.value);
+        showToast(t("share.copied"));
+      });
+    }
+    if (el.collabBackBtn) el.collabBackBtn.addEventListener("click", exitCollabMode);
+
     el.textioBtn.addEventListener("click", openTextioModal);
     el.textioCopyBtn.addEventListener("click", function () {
       copyToClipboard(el.textioArea.value);
@@ -5659,7 +6367,7 @@
     var store = loadState();
     if (!store) {
       var sampleId = genId();
-      store = { currentId: sampleId, trips: [{ id: sampleId, data: createSampleTrip(), archived: false, cloudId: null, updatedAt: 0, publicId: null }] };
+      store = { currentId: sampleId, trips: [{ id: sampleId, data: createSampleTrip(), archived: false, cloudId: null, updatedAt: 0, publicId: null, editId: null }] };
     }
     tripsStore = store.trips;
     currentTripId = store.currentId;
@@ -5671,16 +6379,38 @@
     applyMapPanelState();
     initFirebase();
     bindEvents();
-    // 公開層と公開URL（16）: #p= は #d= と排他（ハッシュの接頭辞が異なる）なので両方呼んでよい。
-    // checkPublicHash が viewOnly=true を同期的に立てた場合、直後の render()/saveState() は自動的に無害化される
+    // 公開層と公開URL（16）・編集できる共有リンク（18）: #p= / #e= / #d= はハッシュの接頭辞が異なるため排他。
+    // checkPublicHash / checkCollabHash が viewOnly=true / collabMode=true を同期的に立てた場合、
+    // 直後の render()/saveState() は自動的に無害化される
     checkPublicHash();
+    checkCollabHash();
     checkSharedHash();
     render();
+    // 編集できる共有リンク（18）: オーナー側は、現在のしおりが editId を持つなら editTrips の購読を開始する。
+    // viewOnly / collabMode 中は関数内部のガードで何もしない
+    syncEditListenerForCurrentTrip();
 
     // 起動時の移行・正規化結果を必ず永続化する（v1→v2移行の直後にリロードされても再移行されないように）
-    // viewOnly 中（公開URL閲覧）は saveState() が no-op のため、ローカルデータは一切書き換わらない
-    saveState();
+    // viewOnly 中（公開URL閲覧）・collabMode 中（共同編集）は saveState() が no-op のため、
+    // ローカルデータは一切書き換わらない
+    if (!viewOnly && !collabMode) saveState();
   }
+
+  // 編集できる共有リンク（18）: マージロジック（mergeRemoteEditIntoOwnerTrip とその補助関数）は
+  // Firestore呼び出しを含まない純粋関数として切り出してあり、自動テストから直接呼べるようここに公開する。
+  // 実行時の挙動には一切影響しない（読み取り専用の関数参照を window に生やすだけ）
+  window.__tabiShioriCollabInternals = {
+    mergeRemoteEditIntoOwnerTrip: mergeRemoteEditIntoOwnerTrip,
+    computeHiddenWithAnchors: computeHiddenWithAnchors,
+    insertByAnchor: insertByAnchor,
+    // テストでの「共同編集者が受け取るはずのデータ」の組み立てに、本物のロジックをそのまま使えるように
+    sanitizeTripForPublic: sanitizeTripForPublic,
+    normalizeTrip: normalizeTrip,
+    // 自己エコー無視（writerIdの一致判定）をテストから正確に再現するために公開する
+    getSessionWriterId: function () {
+      return SESSION_WRITER_ID;
+    }
+  };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
