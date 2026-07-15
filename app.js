@@ -86,6 +86,11 @@
   // しおりのアーカイブ（11）: しおり一覧モーダルの「アーカイブ済みを見る」トグルの開閉状態。
   // モーダルを開き直すたびにリセットする（既定は閉じた状態）
   var tripsArchivedOpen = false;
+  // 開始時刻の手動固定（17）: タイムラインで <input type="time"> をインライン編集中の項目id。
+  // 描画のたびに全カード再構築される都合上、この編集状態は render() をまたいで保持する必要があるため
+  // trip状態（保存対象）ではなくUI一時状態としてここに持つ。item.id はグローバルに一意（genId()）なため、
+  // 日/しおりの切り替えでリセットしなくても別項目のカードに誤って表示されることはない
+  var fixedStartEditingId = null;
   var dragState = null;
   var leafletMap = null;
   var mapMarkersLayer = null;
@@ -149,6 +154,28 @@
     var s = pad2(h) + ":" + pad2(m);
     if (overflowDays > 0) s += " (+" + overflowDays + ")";
     return s;
+  }
+
+  // 開始時刻の手動固定（17）: startMin（オーバーフロー込みの絶対分）から、その日付境界内の
+  // "HH:MM" 表記を得る。<input type="time"> の value にプリセットする用で、
+  // minutesToTimeStr と違い " (+1)" 等のオーバーフロー表記は含めない
+  function minutesToHHMM(mins) {
+    var wrapped = ((mins % 1440) + 1440) % 1440;
+    return pad2(Math.floor(wrapped / 60)) + ":" + pad2(wrapped % 60);
+  }
+
+  // 開始時刻の手動固定（17）: "H:MM" / "HH:MM" 形式のみ許容し、時=0-23・分=0-59の範囲外や
+  // それ以外の型・書式は防御的に null にフォールバックする。有効な値はゼロ埋め2桁の正規形
+  // （例 "9:5" -> "09:05"）に変換して返す。normalizeTrip・CSV読込・インライン編集の確定時など
+  // fixedStart を書き込むすべての箇所でこれを通す（唯一の検証経路）
+  function normalizeFixedStart(v) {
+    if (typeof v !== "string") return null;
+    var m = /^(\d{1,2}):(\d{2})$/.exec(v.trim());
+    if (!m) return null;
+    var h = parseInt(m[1], 10);
+    var mi = parseInt(m[2], 10);
+    if (isNaN(h) || isNaN(mi) || h < 0 || h > 23 || mi < 0 || mi > 59) return null;
+    return pad2(h) + ":" + pad2(mi);
   }
 
   function sleep(ms) {
@@ -623,7 +650,10 @@
           // 非公開マーク（14）: priv=項目まるごと非公開、notePriv=メモのみ非公開。既定 false。
           // move含む全カテゴリー共通。boolean 以外の型は防御的に既定値へフォールバック
           priv: !!it.priv,
-          notePriv: !!it.notePriv
+          notePriv: !!it.notePriv,
+          // 開始時刻の手動固定（17）: move含む全カテゴリー共通。既定 null（未固定）。
+          // "HH:MM" 形式以外・範囲外の値は normalizeFixedStart が防御的に null にフォールバックする
+          fixedStart: normalizeFixedStart(it.fixedStart)
         };
         if (item.lat == null || item.lon == null) {
           item.coordSrc = null;
@@ -1185,11 +1215,11 @@
    * ========================================================= */
   function createSampleTrip() {
     var items = [
-      { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", priv: false, notePriv: false, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
-      { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", priv: false, notePriv: false, lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true, arriveTz: "" },
-      { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", priv: false, notePriv: false, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
-      { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", priv: false, notePriv: false, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
-      { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", priv: false, notePriv: false, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} }
+      { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
+      { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true, arriveTz: "" },
+      { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
+      { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
+      { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", priv: false, notePriv: false, fixedStart: "15:00", lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} }
     ];
     return {
       v: 1,
@@ -1592,6 +1622,14 @@
 
   // 現在タイムゾーンを day.tz で初期化し、move の arriveTz を通過するたびに
   // tzOffsetMinutes(arriveTz) - tzOffsetMinutes(現在tz) をその move の終了時刻以降（自身のendMin含む）に加算する。
+  // 開始時刻の手動固定（17）: item.fixedStart があれば、その項目のstartMinはcursor（それまでの累積）
+  // ではなく固定時刻から決める。固定時刻は「cursorが現在いる暦日と同じ日」の時刻として解釈する
+  // （日跨ぎでcursorが1440を超えていれば、固定時刻もその翌日側に乗る）。
+  // cursor は時差オフセット加算後の値のため、固定時刻もそのまま「画面表示上の現地時間」として
+  // 解釈される（tzとの整合は式の上で自然に保たれる。日をまたぐ move の直後に固定時刻を置いた
+  // 場合も、cursor が既に新tzでのその日の時刻になっているのでズレない）。
+  // 固定によりstartMinが直前の項目のendMin（＝この項目に来る前のcursor）より前になる場合は
+  // conflict:true を立てて返す（データは削除しない。UIで警告表示のみ）。
   // day.items との1:1マッピングは崩さない（行程番号・地図・印刷ビューが依存するため）
   function getDayTimedItems(day) {
     var cursor = parseTimeToMinutes(day.startTime || "09:00");
@@ -1599,8 +1637,16 @@
     var curTz = typeof day.tz === "string" ? day.tz : "";
     var pendingLocalNote = false;
     return day.items.map(function (item) {
-      var startMin = cursor;
-      var endMin = cursor + (item.dur || 0);
+      var cursorBefore = cursor;
+      var startMin;
+      var conflict = false;
+      if (item.fixedStart) {
+        startMin = Math.floor(cursorBefore / 1440) * 1440 + parseTimeToMinutes(item.fixedStart);
+        if (startMin < cursorBefore) conflict = true;
+      } else {
+        startMin = cursorBefore;
+      }
+      var endMin = startMin + (item.dur || 0);
       var localTimeNote = pendingLocalNote;
       pendingLocalNote = false;
       var moveTzDiff = null;
@@ -1620,7 +1666,7 @@
       }
 
       cursor = endMin;
-      return { item: item, startMin: startMin, endMin: endMin, localTimeNote: localTimeNote, moveTzDiff: moveTzDiff };
+      return { item: item, startMin: startMin, endMin: endMin, localTimeNote: localTimeNote, moveTzDiff: moveTzDiff, conflict: conflict };
     });
   }
 
@@ -1712,7 +1758,85 @@
       }
     }
     var timeText = document.createElement("div");
-    timeText.textContent = minutesToTimeStr(startMin) + t("timeline.timeSep") + minutesToTimeStr(endMin);
+    timeText.className = "item-time-row";
+
+    // 開始時刻の手動固定（17）: 開始時刻部分だけクリック可能にし、<input type="time"> をインライン表示する。
+    // viewOnly（公開URL閲覧）中は編集不可（フォールバックのテキスト表示のみ）
+    if (!viewOnly && fixedStartEditingId === item.id) {
+      var fixedStartInput = document.createElement("input");
+      fixedStartInput.type = "time";
+      fixedStartInput.className = "item-fixed-start-input";
+      fixedStartInput.value = minutesToHHMM(startMin);
+      fixedStartInput.setAttribute("aria-label", t("timeline.fixedStartInputAria"));
+      var closeFixedStartEditor = function (commit) {
+        if (fixedStartEditingId !== item.id) return; // 既に確定/取消済み（二重発火防止）
+        fixedStartEditingId = null;
+        if (commit) {
+          item.fixedStart = normalizeFixedStart(fixedStartInput.value);
+          saveState();
+        }
+        render();
+      };
+      fixedStartInput.addEventListener("change", function () {
+        closeFixedStartEditor(true);
+      });
+      fixedStartInput.addEventListener("blur", function () {
+        // change が既に発火して確定済みなら何もしない。未確定のままフォーカスが外れた場合は
+        // 値を保存せずに編集モードだけ閉じる（キャンセル扱い）
+        closeFixedStartEditor(false);
+      });
+      fixedStartInput.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeFixedStartEditor(false);
+        }
+      });
+      timeText.appendChild(fixedStartInput);
+      // DOM挿入直後にフォーカスしてピッカーを開きやすくする
+      setTimeout(function () {
+        fixedStartInput.focus();
+      }, 0);
+    } else {
+      var startBtn = document.createElement(viewOnly ? "span" : "button");
+      if (!viewOnly) startBtn.type = "button";
+      startBtn.className = "item-start-time-btn" + (item.fixedStart ? " is-fixed" : "");
+      startBtn.textContent = (item.fixedStart ? "📌 " : "") + minutesToTimeStr(startMin);
+      startBtn.title = t(item.fixedStart ? "timeline.fixedStartBadgeTitle" : "timeline.fixedStartEditHint");
+      if (!viewOnly) {
+        startBtn.addEventListener("click", function () {
+          if (viewOnly) return;
+          fixedStartEditingId = item.id;
+          render();
+        });
+      }
+      timeText.appendChild(startBtn);
+
+      if (item.fixedStart && !viewOnly) {
+        var clearFixedBtn = document.createElement("button");
+        clearFixedBtn.type = "button";
+        clearFixedBtn.className = "item-fixed-clear-btn";
+        clearFixedBtn.textContent = "✕";
+        clearFixedBtn.title = t("timeline.fixedStartClearAria");
+        clearFixedBtn.setAttribute("aria-label", t("timeline.fixedStartClearAria"));
+        clearFixedBtn.addEventListener("click", function () {
+          if (viewOnly) return;
+          item.fixedStart = null;
+          saveState();
+          render();
+        });
+        timeText.appendChild(clearFixedBtn);
+      }
+    }
+
+    var timeSepEl = document.createElement("span");
+    timeSepEl.className = "item-time-sep";
+    timeSepEl.textContent = t("timeline.timeSep");
+    timeText.appendChild(timeSepEl);
+
+    var endTimeEl = document.createElement("span");
+    endTimeEl.textContent = minutesToTimeStr(endMin);
+    timeText.appendChild(endTimeEl);
+
     timeCol.appendChild(timeText);
     // 時差対応（13）: 直前の move で tz が切り替わった直後の項目にだけ「(現地時間)」を1回表示する
     if (timedMeta && timedMeta.localTimeNote) {
@@ -1832,6 +1956,14 @@
       unresolvedMsg.className = "item-unresolved-msg";
       unresolvedMsg.textContent = t("timeline.unresolvedText");
       body.appendChild(unresolvedMsg);
+    }
+
+    // 開始時刻の手動固定（17）: 固定時刻が直前の項目の終了時刻より前で重なっている場合、常時警告を表示する
+    if (timedMeta && timedMeta.conflict) {
+      var conflictMsg = document.createElement("div");
+      conflictMsg.className = "item-conflict-msg";
+      conflictMsg.textContent = t("timeline.fixedStartConflict");
+      body.appendChild(conflictMsg);
     }
 
     var metaRow = document.createElement("div");
@@ -2363,6 +2495,7 @@
       note: note,
       priv: false,
       notePriv: false,
+      fixedStart: null,
       lat: null,
       lon: null,
       coordSrc: null
@@ -3382,6 +3515,7 @@
           note: "",
           priv: false,
           notePriv: false,
+          fixedStart: null,
           lat: null,
           lon: null,
           mode: mode,
@@ -4279,7 +4413,9 @@
   // CSV_COLUMNS（必須列）には含めず、別枠の任意列として扱う。
   // CSVエクスポートは自分用の完全バックアップのため、非公開項目も含めた完全データを出力する（サニタイズ対象外）
   // 非公開マーク（14拡張）: dayPrivate（day列と同様に行ごと。同一dayの最初の行の値を採用）も任意列として追加する
-  var CSV_OPTIONAL_COLUMNS = ["tz", "arriveTz", "private", "notePrivate", "dayPrivate"];
+  // 開始時刻の手動固定（17）: fixedStart（"HH:MM" または空。move含む全カテゴリー共通）も任意列として追加する。
+  // 旧CSV（列が無い）では null 扱いになり後方互換を保つ
+  var CSV_OPTIONAL_COLUMNS = ["tz", "arriveTz", "private", "notePrivate", "dayPrivate", "fixedStart"];
   // 持ち物リスト・やることリスト（10）: 行程CSVの後に空行を1行挟んだ第2テーブルのヘッダー（必須列）
   var CHECKLIST_CSV_COLUMNS = ["list", "text", "done"];
   // 非公開マークと公開用データ（14）: 第2テーブルの任意列（旧CSVには無いため false 扱いで後方互換）。
@@ -4394,7 +4530,9 @@
           item.priv ? "1" : "0",
           item.notePriv ? "1" : "0",
           // 非公開マーク（14拡張）: dayPrivate は日単位のフラグを行ごとに繰り返し出力する（tz と同様）
-          day.priv ? "1" : "0"
+          day.priv ? "1" : "0",
+          // 開始時刻の手動固定（17）: 未固定は空文字
+          item.fixedStart || ""
         ]);
       });
     });
@@ -4481,6 +4619,10 @@
       // 非公開マークと公開用データ（14）: private・notePrivate は任意列。旧CSVでは false 扱い
       priv: csvBoolField(fields, colIndex, "private"),
       notePriv: csvBoolField(fields, colIndex, "notePrivate"),
+      // 開始時刻の手動固定（17）: fixedStart は任意列。旧CSV（列が無い）では colIndex.fixedStart が
+      // undefined になり fields[undefined] は undefined になるので null 扱い（後方互換）。
+      // 値がある場合も "HH:MM" 形式以外は normalizeFixedStart が防御的に null にする
+      fixedStart: normalizeFixedStart(colIndex.fixedStart != null ? fields[colIndex.fixedStart] : null),
       lat: null,
       lon: null,
       coordSrc: null
@@ -4748,7 +4890,8 @@
     row.className = "print-item cat-" + item.cat;
 
     var parts = [];
-    var timeStr = minutesToTimeStr(timed.startMin) + t("timeline.timeSep") + minutesToTimeStr(timed.endMin);
+    // 開始時刻の手動固定（17）: 固定時刻の項目には📌を付けて印刷・PDFでもひと目でわかるようにする
+    var timeStr = (item.fixedStart ? "📌 " : "") + minutesToTimeStr(timed.startMin) + t("timeline.timeSep") + minutesToTimeStr(timed.endMin);
     if (timed.localTimeNote) timeStr += " " + t("timeline.localTimeNote");
     parts.push(timeStr);
 

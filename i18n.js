@@ -208,7 +208,12 @@
       "share.unpublished": "公開を停止しました",
       "viewOnly.badge": "👁 閲覧モード",
       "viewOnly.backToMine": "自分のしおりに戻る",
-      "viewOnly.notFound": "このしおりは公開されていません"
+      "viewOnly.notFound": "このしおりは公開されていません",
+      "timeline.fixedStartInputAria": "開始時刻を固定",
+      "timeline.fixedStartBadgeTitle": "この時刻に固定されています（クリックで変更）",
+      "timeline.fixedStartEditHint": "クリックして時刻を固定",
+      "timeline.fixedStartClearAria": "固定を解除",
+      "timeline.fixedStartConflict": "⚠ 前の予定と重なっています"
     },
     en: {
       "header.share": "Share",
@@ -360,7 +365,12 @@
       "share.unpublished": "Made private again",
       "viewOnly.badge": "👁 View only",
       "viewOnly.backToMine": "Back to my itinerary",
-      "viewOnly.notFound": "This itinerary is not public"
+      "viewOnly.notFound": "This itinerary is not public",
+      "timeline.fixedStartInputAria": "Fix start time",
+      "timeline.fixedStartBadgeTitle": "Fixed to this time (click to change)",
+      "timeline.fixedStartEditHint": "Click to fix the time",
+      "timeline.fixedStartClearAria": "Unfix",
+      "timeline.fixedStartConflict": "⚠ Overlaps with the previous plan"
     },
     zh: {
       "header.share": "分享",
@@ -512,7 +522,12 @@
       "share.unpublished": "已停止公开",
       "viewOnly.badge": "👁 只读模式",
       "viewOnly.backToMine": "返回我的行程",
-      "viewOnly.notFound": "此行程尚未公开"
+      "viewOnly.notFound": "此行程尚未公开",
+      "timeline.fixedStartInputAria": "固定开始时间",
+      "timeline.fixedStartBadgeTitle": "已固定为此时间（点击可修改）",
+      "timeline.fixedStartEditHint": "点击固定时间",
+      "timeline.fixedStartClearAria": "取消固定",
+      "timeline.fixedStartConflict": "⚠ 与上一项时间重叠"
     },
     th: {
       "header.share": "แชร์",
@@ -664,7 +679,12 @@
       "share.unpublished": "หยุดเผยแพร่แล้ว",
       "viewOnly.badge": "👁 โหมดดูอย่างเดียว",
       "viewOnly.backToMine": "กลับไปที่ทริปของฉัน",
-      "viewOnly.notFound": "ทริปนี้ไม่ได้เผยแพร่ต่อสาธารณะ"
+      "viewOnly.notFound": "ทริปนี้ไม่ได้เผยแพร่ต่อสาธารณะ",
+      "timeline.fixedStartInputAria": "ตรึงเวลาเริ่มต้น",
+      "timeline.fixedStartBadgeTitle": "ตรึงเวลานี้ไว้แล้ว (คลิกเพื่อเปลี่ยน)",
+      "timeline.fixedStartEditHint": "คลิกเพื่อตรึงเวลา",
+      "timeline.fixedStartClearAria": "ยกเลิกการตรึงเวลา",
+      "timeline.fixedStartConflict": "⚠ เวลาซ้อนทับกับรายการก่อนหน้า"
     }
   };
 

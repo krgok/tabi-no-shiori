@@ -588,6 +588,87 @@ select {
   margin-bottom: 2px;
 }
 
+/* 開始時刻の手動固定（17）: 時刻表示行。開始時刻部分だけ操作できるボタン（or 編集用input）＋
+   区切り文字＋終了時刻の3要素を、これまでの単一div(.item-time-col 直下のtext)と同じ見た目で
+   自然に折り返す（54px幅の縦長カラムのため display:flex にはしない） */
+.item-time-row {
+  width: 100%;
+}
+
+.item-time-sep {
+  margin: 0 1px;
+}
+
+.item-start-time-btn {
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 1px 3px;
+  margin: -1px -3px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.item-start-time-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.item-start-time-btn:disabled {
+  cursor: default;
+}
+
+/* 固定済みの開始時刻: 📌＋強調色で常時目立たせる */
+.item-start-time-btn.is-fixed {
+  color: var(--pink-dark);
+  font-weight: 800;
+}
+
+.item-fixed-clear-btn {
+  font-size: 0.62rem;
+  line-height: 1;
+  color: var(--ink-soft);
+  background: none;
+  border: none;
+  padding: 2px;
+  margin-left: 1px;
+  border-radius: 999px;
+  cursor: pointer;
+  vertical-align: middle;
+  /* 見た目は小さいままで、指でも押せるようタップ判定だけを広げる。
+     時刻列は幅が狭いため、::after を absolute で重ねてレイアウトに影響させない */
+  position: relative;
+}
+
+.item-fixed-clear-btn::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 30px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+}
+
+.item-fixed-clear-btn:hover {
+  color: var(--warn);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.item-fixed-start-input {
+  width: 100%;
+  max-width: 68px;
+  font-size: 0.66rem;
+  font-family: inherit;
+  color: var(--ink);
+  background: #fff;
+  border: 1.5px solid var(--pink-dark);
+  border-radius: var(--radius-sm);
+  padding: 1px 2px;
+  outline: none;
+}
+
 .icon-wrap {
   position: relative;
   display: inline-flex;
@@ -756,6 +837,13 @@ select {
 .item-unresolved-msg {
   font-size: 0.78rem;
   font-weight: 700;
+  color: var(--warn);
+}
+
+/* 開始時刻の手動固定（17）: 固定時刻が直前の項目と重なっているときの控えめな警告 */
+.item-conflict-msg {
+  font-size: 0.74rem;
+  font-weight: 600;
   color: var(--warn);
 }
 
@@ -2145,6 +2233,12 @@ body.view-only-mode .checklist-text-input {
   cursor: default;
   background: transparent;
   box-shadow: none;
+}
+
+/* 開始時刻の手動固定（17）: 閲覧モードではJS側で<span>（クリックハンドラ無し）として描画されるが、
+   見た目からも「押せる」ヒントを消しておく */
+body.view-only-mode .item-start-time-btn {
+  cursor: default;
 }
 
 body.view-only-mode .trip-title {
