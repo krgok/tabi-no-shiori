@@ -84,6 +84,10 @@
   var placesApiErrorShown = false;
   // Cloud Translation API の「未有効化」トーストは1回の言語切替（名前補完・タイトル自動翻訳）につき1回だけ表示する
   var translateApiErrorShown = false;
+  // APIキー未設定時の案内（3c/6e 追記）: 「キーが無いために翻訳をスキップした」項目が1件でもあれば
+  // 1回の言語切替につき1回だけ案内トーストを出す。Places/Translation の「未有効化」トーストとは別事象
+  // （こちらはキー自体が未設定のケース）なので専用フラグで管理する
+  var noKeyNoticeShown = false;
   // スポット名の多言語表示（3c）: ルート検討/地図更新（isGeoRunning）とは別フラグで管理する。
   // nameFetchToken は実行中バッチの識別用。中断時にインクリメントし、進行中のループに「もう古い」と伝える
   var isNameFetchRunning = false;
@@ -3555,6 +3559,21 @@
     translateApiErrorShown = false;
   }
 
+  // 実行（言語切替の名前補完・タイトル翻訳）開始時に呼ぶ。「APIキー未設定」案内トーストの1回制限をリセットする（3c/6e追記）
+  function resetNoKeyNoticeFlag() {
+    noKeyNoticeShown = false;
+  }
+
+  // APIキー未設定のために翻訳をスキップした項目があったとき、言語切替1回につき1度だけ案内トーストを出す（3c/6e追記）。
+  // targetLang === "ja" は翻訳対象外のためここでも常に何もしない（fetchLocalizedNames は ja 切替時にも
+  // OSM取得自体は試みるため、この呼び出し側だけでなくここでも二重にガードしておく）
+  function showNoKeyNoticeIfNeeded(targetLang) {
+    if (targetLang === "ja") return;
+    if (noKeyNoticeShown) return;
+    noKeyNoticeShown = true;
+    showToast(t("toast.noKeyNotice"));
+  }
+
   // Google Places API (New) の Text Search 共通下位処理。1件だけ問い合わせて place オブジェクト（または null）を返す。
   // 403/400（未有効化・キー制限）は専用トーストを実行につき1回だけ表示して null を返す。
   // ネットワークエラーは静かに null を返し、呼び出し元の既存フォールバックに委ねる
@@ -3903,7 +3922,10 @@
           if (typeof item.names[targetLang] === "string" && item.names[targetLang]) return; // OSMで解決済み
 
           var apiKey = getGmapsKey();
-          if (!apiKey) return; // キー未設定ならここまで（従来どおり null のまま）
+          if (!apiKey) {
+            showNoKeyNoticeIfNeeded(targetLang); // キー未設定ならここまで（従来どおり null のまま）
+            return;
+          }
 
           if (isMove) {
             // move: Places はスキップし Translation のみ
@@ -3931,7 +3953,10 @@
           if (typeof item.noteNames[targetLang] === "string" && item.noteNames[targetLang]) return;
 
           var apiKey = getGmapsKey();
-          if (!apiKey) return; // キー未設定ならここまで（従来どおり null のまま）
+          if (!apiKey) {
+            showNoKeyNoticeIfNeeded(targetLang); // キー未設定ならここまで（従来どおり null のまま）
+            return;
+          }
 
           return translateText((item.note || "").trim(), apiKey, targetLang).then(function (translated) {
             item.noteNames[targetLang] = translated || null;
@@ -3980,10 +4005,13 @@
     var current = trip.titles[targetLang];
     if (typeof current === "string" && current && current !== base) return;
 
-    var apiKey = getGmapsKey();
-    if (!apiKey) return;
+    if (!base) return; // 翻訳できるベースタイトルが無ければ何もしない（APIキー未設定案内も出さない）
 
-    if (!base) return; // 翻訳できるベースタイトルが無ければ何もしない
+    var apiKey = getGmapsKey();
+    if (!apiKey) {
+      showNoKeyNoticeIfNeeded(targetLang); // キー未設定のため翻訳をスキップ（3c/6e追記の案内トースト）
+      return;
+    }
 
     var myTrip = trip; // 翻訳完了までにしおりが切り替わっていた場合、誤って別のしおりに保存しない
     translateText(base, apiKey, targetLang).then(function (translated) {
@@ -6275,6 +6303,7 @@
       // Places/Translation の「未有効化」トーストは、この1回の言語切替（＝1実行）につき各1回に制限する
       resetPlacesApiErrorFlag();
       resetTranslateApiErrorFlag();
+      resetNoKeyNoticeFlag();
       fetchLocalizedNames(trip.lang);
       fetchLocalizedTitle(trip.lang);
     });
