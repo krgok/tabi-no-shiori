@@ -1862,7 +1862,18 @@
   // ヘッダーのタイトル表示・しおり一覧・共有/テキスト出力のいずれもこれを共用する
   function tripDisplayTitle(data) {
     var tt = data && data.titles;
-    if (tt && typeof tt[lang()] === "string" && tt[lang()]) return tt[lang()];
+    var base = (tt && tt.ja) || (data && data.title) || "";
+    if (tt && typeof tt[lang()] === "string" && tt[lang()]) {
+      // 新規しおりの初期値（例: "New Trip"）が残っているだけで、ベースタイトルは既に
+      // 実名が付いている場合は、初期値ではなくベースタイトルを表示する。
+      // （そのままだと翻訳前・APIキー未設定の間ずっと "New Trip" と表示され、実際の
+      //   しおり名が見えなくなる。ベースタイトルも初期値のままなら本当に新規しおりなので
+      //   その言語の初期値をそのまま使う）
+      var isDefault = tt[lang()] === window.I18N.NEW_TRIP_TITLES[lang()];
+      var baseIsDefault = base === window.I18N.NEW_TRIP_TITLES.ja;
+      if (isDefault && !baseIsDefault) return base;
+      return tt[lang()];
+    }
     return (data && data.title) || "";
   }
 
@@ -3999,11 +4010,16 @@
 
     var base = (trip.titles.ja || trip.title || "").trim();
 
-    // titles[L] が「非空」かつ「ベースタイトルと異なる」場合のみ翻訳済みとみなしてスキップする。
-    // titles[L] === base の場合は未翻訳（例: タイトルblurハンドラが変更なしで誤って
-    // 現在の表示文字列を保存してしまった名残）とみなし、翻訳を実行して成功したら上書きする
+    // titles[L] が「非空」かつ「ベースタイトルと異なる」かつ「新規しおりの初期値でない」場合のみ
+    // 翻訳済みとみなしてスキップする。
+    // - titles[L] === base: 未翻訳（タイトルblurハンドラが変更なしで現在の表示文字列を
+    //   保存してしまった名残）
+    // - titles[L] が NEW_TRIP_TITLES と一致: しおり作成時に自動で入った初期値（例: "New Trip"）で
+    //   あってユーザーが決めた訳ではない。ベースタイトルを付けた後もこれが残り、
+    //   「翻訳済み」と誤判定されて永久に翻訳されない状態になっていた
     var current = trip.titles[targetLang];
-    if (typeof current === "string" && current && current !== base) return;
+    var isDefaultTitle = current === window.I18N.NEW_TRIP_TITLES[targetLang];
+    if (typeof current === "string" && current && current !== base && !isDefaultTitle) return;
 
     if (!base) return; // 翻訳できるベースタイトルが無ければ何もしない（APIキー未設定案内も出さない）
 
@@ -4017,8 +4033,12 @@
     translateText(base, apiKey, targetLang).then(function (translated) {
       if (!translated) return;
       if (trip !== myTrip) return; // しおり切替後は保存しない
+      // 翻訳を待っている間に手動編集された場合は上書きしない。ただし冒頭のスキップ判定と
+      // 同じ基準にすること（初期値 "New Trip" 等が残っているだけの状態は「手動編集」ではないので、
+      // ここで弾いてしまうと翻訳結果が永久に保存されない）
       var latest = myTrip.titles[targetLang];
-      if (typeof latest === "string" && latest && latest !== base) return; // その間に手動編集された等
+      var latestIsDefault = latest === window.I18N.NEW_TRIP_TITLES[targetLang];
+      if (typeof latest === "string" && latest && latest !== base && !latestIsDefault) return;
       myTrip.titles[targetLang] = translated;
       saveState();
       renderHeader();
