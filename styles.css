@@ -2014,6 +2014,27 @@ select {
 
 .modal-prep {
   max-width: 620px;
+  /* 持ち物・やることは項目が増えるほど広く見たくなるため、右下のつまみで
+     サイズを変えられるようにする。ここの指定は既定値で、resize 操作が上書きする */
+  resize: both;
+  overflow: auto;
+  min-width: 280px;
+  min-height: 240px;
+}
+
+/* サイズ変更のつまみの目印。ネイティブのつまみは小さく気づきにくいので、
+   右下に控えめな三角を重ねる（当たり判定はブラウザ側のつまみが持つ） */
+.modal-prep::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 10px 10px;
+  border-color: transparent transparent rgba(160, 120, 130, 0.4) transparent;
+  pointer-events: none;
 }
 
 .modal-prep .checklists-row {

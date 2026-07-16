@@ -14,6 +14,8 @@
   var STORAGE_KEY = "tabi-shiori-v2"; // v2: { currentId, trips: [{ id, data: <trip> }] }（複数しおりの管理 9）
   var GEO_CACHE_KEY = "tabi-geo-cache";
   var MAP_OPEN_KEY = "tabi-map-open";
+  // 準備モーダル（持ち物・やること）のサイズ。ユーザーが変えた大きさを次回も再現する
+  var PREP_SIZE_KEY = "tabi-prep-size";
   var NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
   var GEOCODE_MIN_INTERVAL_MS = 1100;
   var MAP_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
@@ -2916,9 +2918,42 @@
     renderChecklistSection(kind);
   }
 
+  // 準備モーダルのサイズを復元する。保存値が今の画面より大きい場合は画面に収まるよう抑える
+  // （小さい画面で開いたときに画面外へはみ出さないように）
+  function restorePrepModalSize() {
+    var card = el.prepModal.querySelector(".modal-prep");
+    if (!card) return;
+    var saved = null;
+    try {
+      saved = JSON.parse(localStorage.getItem(PREP_SIZE_KEY) || "null");
+    } catch (e) {
+      saved = null;
+    }
+    if (!saved || typeof saved.w !== "number" || typeof saved.h !== "number") return;
+    var maxW = Math.max(280, window.innerWidth - 32);
+    var maxH = Math.max(240, window.innerHeight * 0.86);
+    card.style.width = Math.min(saved.w, maxW) + "px";
+    card.style.height = Math.min(saved.h, maxH) + "px";
+    // 復元したサイズが既定の max-width(620px) に負けないようにする
+    card.style.maxWidth = "none";
+  }
+
+  function savePrepModalSize() {
+    var card = el.prepModal.querySelector(".modal-prep");
+    if (!card) return;
+    var r = card.getBoundingClientRect();
+    if (r.width < 10 || r.height < 10) return; // 非表示時のゼロサイズは保存しない
+    try {
+      localStorage.setItem(PREP_SIZE_KEY, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) }));
+    } catch (e) {
+      /* 保存できなくても動作に支障はない */
+    }
+  }
+
   function openPrepModal() {
     renderChecklists();
     openModal(el.prepModal);
+    restorePrepModalSize();
     // 項目名の高さの測り直し。モーダルが閉じている間は要素が非表示で scrollHeight が
     // 測れず（0扱い）、renderChecklists 時点の自動伸縮が効かないため、表示した後に必ずやり直す
     Array.prototype.forEach.call(el.prepModal.querySelectorAll(".checklist-text-input"), autoGrowNote);
@@ -3761,7 +3796,7 @@
     if (isGeoRunning) return; // ルート検討/地図更新と競合させない
 
     var targets = [];
-    trip.days.forEach(function (day) {
+    trip.days.forEach(function (day, dayIdx) {
       day.items.forEach(function (item) {
         if (item.cat === "move") return;
         if (!((item.loc || item.name || "").trim())) return;
@@ -3769,10 +3804,18 @@
         // names[targetLang] が非空文字列のときだけ取得済みとしてスキップする。
         // null（取得を試みたが見つからなかった）はキー追加後の再試行対象として残す
         if (typeof item.names[targetLang] === "string" && item.names[targetLang]) return;
-        targets.push({ item: item, day: day });
+        targets.push({ item: item, day: day, dayIdx: dayIdx });
       });
     });
     if (targets.length === 0) return;
+
+    // 表示中の日のスポットを先に処理する。OSMのレート制限（1.1秒/件）があるため、
+    // 上から順だと画面に見えている日の反映が最後になることがある
+    targets.sort(function (a, b) {
+      var aCur = a.dayIdx === currentDayIndex ? 0 : 1;
+      var bCur = b.dayIdx === currentDayIndex ? 0 : 1;
+      return aCur - bCur;
+    });
 
     isNameFetchRunning = true;
     var myToken = (nameFetchToken += 1);
@@ -3803,25 +3846,33 @@
               }
             });
 
-        return osmStep.then(function () {
-          if (typeof item.names[targetLang] === "string" && item.names[targetLang]) return; // OSMで解決済み
+        return osmStep
+          .then(function () {
+            if (typeof item.names[targetLang] === "string" && item.names[targetLang]) return; // OSMで解決済み
 
-          var apiKey = getGmapsKey();
-          if (!apiKey) return; // キー未設定ならここまで（従来どおり null のまま）
+            var apiKey = getGmapsKey();
+            if (!apiKey) return; // キー未設定ならここまで（従来どおり null のまま）
 
-          // 2. Places Text Search を対象言語で照会
-          return placesDisplayNameSearch(item, day, targetLang, apiKey).then(function (placeName) {
-            if (placeName) {
-              item.names[targetLang] = placeName;
-              return;
-            }
-            // 3. Cloud Translation API で機械翻訳
-            var query = (item.loc || item.name || "").trim();
-            return translateText(query, apiKey, targetLang).then(function (translated) {
-              item.names[targetLang] = translated || null; // 全滅なら null のまま
+            // 2. Places Text Search を対象言語で照会
+            return placesDisplayNameSearch(item, day, targetLang, apiKey).then(function (placeName) {
+              if (placeName) {
+                item.names[targetLang] = placeName;
+                return;
+              }
+              // 3. Cloud Translation API で機械翻訳
+              var query = (item.loc || item.name || "").trim();
+              return translateText(query, apiKey, targetLang).then(function (translated) {
+                item.names[targetLang] = translated || null; // 全滅なら null のまま
+              });
             });
+          })
+          .then(function () {
+            // 1件ごとに画面へ反映する。スポットが多いと OSM のレート制限（1.1秒/件）で
+            // 全件完了まで数十秒かかり、最後にまとめて描画すると「切り替えても何も変わらない」
+            // ように見えてしまうため、取得できたものから順に表示する
+            if (myToken !== nameFetchToken) return; // 中断済み
+            if (typeof item.names[targetLang] === "string" && item.names[targetLang]) render();
           });
-        });
       });
     });
 
@@ -6249,6 +6300,20 @@
 
     // 準備リストへのクイックアクセス（11）: ヘッダー🧳ボタン・準備モーダル
     el.prepBtn.addEventListener("click", openPrepModal);
+
+    // 準備モーダルのサイズ変更を保存する（次回開いたときに同じ大きさで開く）。
+    // ResizeObserver は環境によってはコールバックが配送されない（このプロジェクトでは
+    // requestAnimationFrame でも同様の問題があった）ため、フレームに依存しない
+    // 「つまみのドラッグが終わった時（pointerup）」と「モーダルを閉じた時」に保存する
+    var prepCard = el.prepModal.querySelector(".modal-prep");
+    if (prepCard) {
+      prepCard.addEventListener("pointerup", savePrepModalSize);
+      prepCard.addEventListener("pointercancel", savePrepModalSize);
+    }
+    el.prepModal.addEventListener("click", function (e) {
+      // 閉じる操作（×ボタン・オーバーレイのクリック）の前に現在のサイズを控える
+      if (e.target === el.prepModal || (e.target.dataset && e.target.dataset.close)) savePrepModalSize();
+    });
     el.prepPackingAddBtn.addEventListener("click", function () {
       addChecklistItem("packing", "prep");
     });
