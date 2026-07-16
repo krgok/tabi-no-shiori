@@ -647,14 +647,28 @@
   // names: { en?: string|null, zh?: string|null, th?: string|null, ja?: string|null }
   // 取得済みの言語のみキーを持つ（null =「取得を試みたが無かった」の記録で再取得しない）。
   // 不正な型・未知の言語キーは無視する
-  function normalizeNames(raw) {
+  // 2つの文字列が「実質同じ」か。空白・改行の違いを無視して比較する。
+  // 翻訳APIは原文と同じ言語へ訳そうとすると、記号や空白だけが正規化された
+  // ほぼ同一の文字列を返す。それを翻訳結果として保存・表示すると、原文の真下に
+  // ほぼ同じ文が重複して出てしまうため、この判定で弾く
+  function isEffectivelySameText(a, b) {
+    if (typeof a !== "string" || typeof b !== "string") return false;
+    var norm = function (s) {
+      return s.replace(/\s+/g, "").trim();
+    };
+    return norm(a) === norm(b);
+  }
+
+  // names / noteNames の正規化。source（原文）を渡すと、原文と実質同じ値は
+  // 「翻訳不要」とみなして null に落とす（過去に保存された重複データもここで自動的に直る）
+  function normalizeNames(raw, source) {
     var names = {};
     if (raw && typeof raw === "object" && !Array.isArray(raw)) {
       window.I18N.LANGUAGES.forEach(function (Lc) {
         if (Object.prototype.hasOwnProperty.call(raw, Lc)) {
           var v = raw[Lc];
           if (typeof v === "string" || v === null) {
-            names[Lc] = v;
+            names[Lc] = typeof v === "string" && isEffectivelySameText(v, source) ? null : v;
           }
         }
       });
@@ -761,9 +775,10 @@
         // スポット名の多言語表示（3c 追記）: move も含む全カテゴリー共通で names を持つ。
         // move は「前後スポットから組み立てる A → B」表示を優先するが、それが組み立てられない
         // 手入力の move 名（例:「タクシー移動」）を翻訳して保存する先として使う
-        item.names = normalizeNames(it.names);
+        // 第2引数に原文を渡すことで、原文と実質同じ値（＝同言語への無意味な翻訳結果）は null に落とす
+        item.names = normalizeNames(it.names, item.loc || item.name);
         // メモの多言語表示（3c 追記）: names と同じ構造。メモ欄の下に控えめに翻訳文を出すためのキャッシュ
-        item.noteNames = normalizeNames(it.noteNames);
+        item.noteNames = normalizeNames(it.noteNames, item.note);
         if (cat === "move") {
           item.mode = window.I18N.MODES.indexOf(it.mode) !== -1 ? it.mode : "other";
           item.distKm = typeof it.distKm === "number" && isFinite(it.distKm) ? it.distKm : null;
@@ -2411,7 +2426,8 @@
     var i18nHintText = null;
     if (item.cat !== "move") {
       var localizedName = item.names && typeof item.names[lang()] === "string" ? item.names[lang()] : null;
-      if (localizedName && localizedName !== item.name) {
+      // メモ側と同じく、原文と実質同じ訳は出さない（重複表示の防止）
+      if (localizedName && !isEffectivelySameText(localizedName, item.name)) {
         i18nHintText = localizedName;
       }
     } else {
@@ -2661,7 +2677,9 @@
     // メモの多言語表示（3c 追記）: 名前の 🌐 ヒントと同じ見た目・考え方で翻訳文を控えめに表示する。
     // メモ入力欄自体は常に元の文のまま（編集の正は変えない）
     var noteI18nText = item.noteNames && typeof item.noteNames[lang()] === "string" ? item.noteNames[lang()] : null;
-    if (noteI18nText && item.note && noteI18nText !== item.note) {
+    // 原文と実質同じ（空白の違いしかない）訳は出さない。原文の真下にほぼ同じ文が
+    // 重複表示されてカードが無駄に長くなるのを防ぐ
+    if (noteI18nText && item.note && !isEffectivelySameText(noteI18nText, item.note)) {
       var noteI18nHintEl = document.createElement("div");
       noteI18nHintEl.className = "item-i18n-hint";
       noteI18nHintEl.textContent = "🌐 " + noteI18nText;
@@ -3952,8 +3970,11 @@
               return;
             }
             // 3. Cloud Translation API で機械翻訳
-            return translateText(nameQueryOf(item), apiKey, targetLang).then(function (translated) {
-              item.names[targetLang] = translated || null; // 全滅なら null のまま
+            var nameSrc = nameQueryOf(item);
+            return translateText(nameSrc, apiKey, targetLang).then(function (translated) {
+              // メモ側と同じ理由で、原文と実質同じ訳（＝同言語への翻訳）は保存しない
+              item.names[targetLang] =
+                translated && !isEffectivelySameText(translated, nameSrc) ? translated : null;
             });
           });
         });
@@ -3969,8 +3990,14 @@
             return;
           }
 
-          return translateText((item.note || "").trim(), apiKey, targetLang).then(function (translated) {
-            item.noteNames[targetLang] = translated || null;
+          var noteSrc = (item.note || "").trim();
+          return translateText(noteSrc, apiKey, targetLang).then(function (translated) {
+            // 原文と実質同じなら「翻訳不要」として null にする。メモが既に対象言語で
+            // 書かれている場合（例: 日本語表示中の日本語メモ）、翻訳APIは空白だけが
+            // 正規化されたほぼ同一の文字列を返す。それを保存すると原文の真下に
+            // ほぼ同じ文が重複表示されてしまう
+            item.noteNames[targetLang] =
+              translated && !isEffectivelySameText(translated, noteSrc) ? translated : null;
           });
         });
 
