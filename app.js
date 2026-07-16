@@ -754,6 +754,12 @@
         if (item.lat == null || item.lon == null) {
           item.coordSrc = null;
         }
+        // スポット名の多言語表示（3c 追記）: move も含む全カテゴリー共通で names を持つ。
+        // move は「前後スポットから組み立てる A → B」表示を優先するが、それが組み立てられない
+        // 手入力の move 名（例:「タクシー移動」）を翻訳して保存する先として使う
+        item.names = normalizeNames(it.names);
+        // メモの多言語表示（3c 追記）: names と同じ構造。メモ欄の下に控えめに翻訳文を出すためのキャッシュ
+        item.noteNames = normalizeNames(it.noteNames);
         if (cat === "move") {
           item.mode = window.I18N.MODES.indexOf(it.mode) !== -1 ? it.mode : "other";
           item.distKm = typeof it.distKm === "number" && isFinite(it.distKm) ? it.distKm : null;
@@ -766,7 +772,6 @@
           item.gmap = typeof it.gmap === "string" ? it.gmap : "";
           // 地図更新ボタンが自動入力した gmap リンクかどうかのフラグ（3b追記）
           item.gmapAuto = !!it.gmapAuto;
-          item.names = normalizeNames(it.names);
         }
         day.items.push(item);
       });
@@ -851,9 +856,14 @@
           }
         });
 
-        // 3. notePriv:true の項目（削除されないもの）は note を空にする
+        // 3. notePriv:true の項目（削除されないもの）は note を空にする。
+        // メモの多言語表示（3c 追記）: noteNames は翻訳済みメモそのものなので、note と同様に空にしないと
+        // 非公開にした意味が無い（noteNames 経由でメモ内容が公開コピーに漏れてしまう）
         items.forEach(function (it) {
-          if (it && it.notePriv) it.note = "";
+          if (it && it.notePriv) {
+            it.note = "";
+            it.noteNames = {};
+          }
         });
 
         // 4. 削除対象を取り除き、priv/notePriv フラグ自体も消す
@@ -1000,10 +1010,13 @@
       // 受信データは常に priv:false（sanitize済み）だが、念のため明示しておく
       merged.priv = false;
       // notePriv:true だった項目は、共同編集者には空メモしか見えていない。
-      // 受信の空メモで上書きせず、オーナーの元メモを保持する（notePriv フラグ自体も復元する）
+      // 受信の空メモで上書きせず、オーナーの元メモを保持する（notePriv フラグ自体も復元する）。
+      // メモの多言語表示（3c 追記）: noteNames も同様に公開コピーでは空にされているため、
+      // note と合わせてオーナー側の翻訳キャッシュを復元する（受信データで上書きして消さない）
       if (ownerIt && ownerIt.notePriv) {
         merged.notePriv = true;
         merged.note = ownerIt.note;
+        merged.noteNames = ownerIt.noteNames;
       } else {
         merged.notePriv = false;
       }
@@ -1626,11 +1639,11 @@
    * ========================================================= */
   function createSampleTrip() {
     var items = [
-      { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
-      { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true, arriveTz: "" },
-      { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
-      { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} },
-      { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", priv: false, notePriv: false, fixedStart: "15:00", lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {} }
+      { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+      { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true, arriveTz: "", names: {}, noteNames: {} },
+      { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+      { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+      { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", priv: false, notePriv: false, fixedStart: "15:00", lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} }
     ];
     return {
       v: 1,
@@ -2395,6 +2408,13 @@
         if (computedMoveTitle !== item.name) {
           i18nHintText = computedMoveTitle;
         }
+      } else {
+        // 前後のスポットから「A → B」を組み立てられない move（手入力の move 名など）:
+        // Translation API で翻訳した names[L] があればそれを表示する（3c 追記）
+        var moveLocalizedName = item.names && typeof item.names[lang()] === "string" ? item.names[lang()] : null;
+        if (moveLocalizedName && moveLocalizedName !== item.name) {
+          i18nHintText = moveLocalizedName;
+        }
       }
     }
     if (i18nHintText) {
@@ -2594,8 +2614,14 @@
       autoGrowNote(noteInput);
     });
     noteInput.addEventListener("change", function () {
-      item.note = noteInput.value;
+      var newNote = noteInput.value;
+      if (newNote !== item.note) {
+        // メモを編集したら、古い翻訳が残らないようその項目の noteNames を全消去する（3c 追記）
+        item.noteNames = {};
+      }
+      item.note = newNote;
       saveState();
+      render();
     });
     noteInput.readOnly = viewOnly; // 公開URL閲覧（16）
     noteRow.appendChild(noteInput);
@@ -2616,6 +2642,16 @@
     noteRow.appendChild(notePrivBtn);
 
     body.appendChild(noteRow);
+
+    // メモの多言語表示（3c 追記）: 名前の 🌐 ヒントと同じ見た目・考え方で翻訳文を控えめに表示する。
+    // メモ入力欄自体は常に元の文のまま（編集の正は変えない）
+    var noteI18nText = item.noteNames && typeof item.noteNames[lang()] === "string" ? item.noteNames[lang()] : null;
+    if (noteI18nText && item.note && noteI18nText !== item.note) {
+      var noteI18nHintEl = document.createElement("div");
+      noteI18nHintEl.className = "item-i18n-hint";
+      noteI18nHintEl.textContent = "🌐 " + noteI18nText;
+      body.appendChild(noteI18nHintEl);
+    }
 
     if (item.notePriv) {
       var notePrivHint = document.createElement("div");
@@ -3176,7 +3212,9 @@
       fixedStart: null,
       lat: null,
       lon: null,
-      coordSrc: null
+      coordSrc: null,
+      names: {},
+      noteNames: {}
     };
     if (addFormCat === "move") {
       item.mode = "train";
@@ -3186,7 +3224,6 @@
     } else {
       item.gmap = "";
       item.gmapAuto = false;
-      item.names = {};
     }
     trip.days[currentDayIndex].items.push(item);
     el.addName.value = "";
@@ -3787,10 +3824,11 @@
     }, 3600);
   }
 
-  // 言語切替時に、全日の「名前があり names[新言語] がまだ非空文字列でない move 以外の項目」を対象に、
-  // OSM namedetails → Places Text Search（APIキー設定時）→ Cloud Translation API（APIキー設定時）の順で
-  // 逐次解決する（3c 追記のフォールバックチェーン）。ルート検討/地図更新（isGeoRunning）の実行中は開始しない。
-  // 以前の name-fetch が実行中なら（連打対策として）中断してから新しいバッチを開始する
+  // 言語切替時に、全日の項目を対象に名前とメモの翻訳を逐次解決する（3c 追記のフォールバックチェーン）。
+  // ルート検討/地図更新（isGeoRunning）の実行中は開始しない。以前の name-fetch が実行中なら
+  // （連打対策として）中断してから新しいバッチを開始する。
+  // 対象は「名前があり names[新言語] が未取得の項目」（move も含む）と「メモがあり
+  // noteNames[新言語] が未取得の項目」（cat問わず）の和集合。1項目が両方に該当することもある
   function fetchLocalizedNames(targetLang) {
     abortNameFetch();
     if (isGeoRunning) return; // ルート検討/地図更新と競合させない
@@ -3798,13 +3836,20 @@
     var targets = [];
     trip.days.forEach(function (day, dayIdx) {
       day.items.forEach(function (item) {
-        if (item.cat === "move") return;
-        if (!((item.loc || item.name || "").trim())) return;
         if (!item.names) item.names = {};
+        if (!item.noteNames) item.noteNames = {};
+
         // names[targetLang] が非空文字列のときだけ取得済みとしてスキップする。
         // null（取得を試みたが見つからなかった）はキー追加後の再試行対象として残す
-        if (typeof item.names[targetLang] === "string" && item.names[targetLang]) return;
-        targets.push({ item: item, day: day, dayIdx: dayIdx });
+        var nameQuery = (item.loc || item.name || "").trim();
+        var needsName = !!nameQuery && !(typeof item.names[targetLang] === "string" && item.names[targetLang]);
+
+        // メモの多言語表示（3c 追記）: noteNames も同じ「非空文字列だけ取得済み」ルール
+        var noteQuery = (item.note || "").trim();
+        var needsNote = !!noteQuery && !(typeof item.noteNames[targetLang] === "string" && item.noteNames[targetLang]);
+
+        if (!needsName && !needsNote) return;
+        targets.push({ item: item, day: day, dayIdx: dayIdx, needsName: needsName, needsNote: needsNote });
       });
     });
     if (targets.length === 0) return;
@@ -3826,14 +3871,21 @@
     targets.forEach(function (pair) {
       var item = pair.item;
       var day = pair.day;
+      var needsName = pair.needsName;
+      var needsNote = pair.needsNote;
       chain = chain.then(function () {
         if (myToken !== nameFetchToken) return; // 中断済み：新規開始しない
         completed += 1;
         showNameFetchProgress(t("timeline.nameFetchProgress", { cur: completed, total: total }));
 
-        // 1. OSM namedetails（全言語一括保存のため、names にいずれかのキーが既にある項目はスキップ）
+        // move（手入力の移動名）は場所ではないため OSM/Places 検索が無意味。
+        // Translation API のみを使う（1. OSM は完全スキップ、2. Places もスキップ）
+        var isMove = item.cat === "move";
+
+        // 1. OSM namedetails（全言語一括保存のため、names にいずれかのキーが既にある項目はスキップ）。
+        // move / 名前翻訳が不要な項目はそもそも呼ばない
         var hasAnyOsmKey = Object.keys(item.names).length > 0;
-        var osmStep = hasAnyOsmKey
+        var osmStep = !needsName || isMove || hasAnyOsmKey
           ? Promise.resolve()
           : fetchSpotNameDetails(item).then(function (result) {
               // 中断後でも、既に発行済みのリクエストの結果は無駄にせずそのまま items に反映する。
@@ -3846,33 +3898,55 @@
               }
             });
 
-        return osmStep
-          .then(function () {
-            if (typeof item.names[targetLang] === "string" && item.names[targetLang]) return; // OSMで解決済み
+        var nameStep = osmStep.then(function () {
+          if (!needsName) return;
+          if (typeof item.names[targetLang] === "string" && item.names[targetLang]) return; // OSMで解決済み
 
-            var apiKey = getGmapsKey();
-            if (!apiKey) return; // キー未設定ならここまで（従来どおり null のまま）
+          var apiKey = getGmapsKey();
+          if (!apiKey) return; // キー未設定ならここまで（従来どおり null のまま）
 
-            // 2. Places Text Search を対象言語で照会
-            return placesDisplayNameSearch(item, day, targetLang, apiKey).then(function (placeName) {
-              if (placeName) {
-                item.names[targetLang] = placeName;
-                return;
-              }
-              // 3. Cloud Translation API で機械翻訳
-              var query = (item.loc || item.name || "").trim();
-              return translateText(query, apiKey, targetLang).then(function (translated) {
-                item.names[targetLang] = translated || null; // 全滅なら null のまま
-              });
+          if (isMove) {
+            // move: Places はスキップし Translation のみ
+            return translateText(nameQueryOf(item), apiKey, targetLang).then(function (translated) {
+              item.names[targetLang] = translated || null;
             });
-          })
-          .then(function () {
-            // 1件ごとに画面へ反映する。スポットが多いと OSM のレート制限（1.1秒/件）で
-            // 全件完了まで数十秒かかり、最後にまとめて描画すると「切り替えても何も変わらない」
-            // ように見えてしまうため、取得できたものから順に表示する
-            if (myToken !== nameFetchToken) return; // 中断済み
-            if (typeof item.names[targetLang] === "string" && item.names[targetLang]) render();
+          }
+
+          // 2. Places Text Search を対象言語で照会
+          return placesDisplayNameSearch(item, day, targetLang, apiKey).then(function (placeName) {
+            if (placeName) {
+              item.names[targetLang] = placeName;
+              return;
+            }
+            // 3. Cloud Translation API で機械翻訳
+            return translateText(nameQueryOf(item), apiKey, targetLang).then(function (translated) {
+              item.names[targetLang] = translated || null; // 全滅なら null のまま
+            });
           });
+        });
+
+        // メモの翻訳（3c 追記）: メモは自由文で場所ではないため、OSM/Places は使わず Translation のみ
+        var noteStep = nameStep.then(function () {
+          if (!needsNote) return;
+          if (typeof item.noteNames[targetLang] === "string" && item.noteNames[targetLang]) return;
+
+          var apiKey = getGmapsKey();
+          if (!apiKey) return; // キー未設定ならここまで（従来どおり null のまま）
+
+          return translateText((item.note || "").trim(), apiKey, targetLang).then(function (translated) {
+            item.noteNames[targetLang] = translated || null;
+          });
+        });
+
+        return noteStep.then(function () {
+          // 1件ごとに画面へ反映する。スポットが多いと OSM のレート制限（1.1秒/件）で
+          // 全件完了まで数十秒かかり、最後にまとめて描画すると「切り替えても何も変わらない」
+          // ように見えてしまうため、取得できたものから順に表示する
+          if (myToken !== nameFetchToken) return; // 中断済み
+          var nameUpdated = needsName && typeof item.names[targetLang] === "string" && item.names[targetLang];
+          var noteUpdated = needsNote && typeof item.noteNames[targetLang] === "string" && item.noteNames[targetLang];
+          if (nameUpdated || noteUpdated) render();
+        });
       });
     });
 
@@ -3882,6 +3956,11 @@
       saveState();
       render();
     });
+  }
+
+  // fetchLocalizedNames 内: 名前翻訳に使うクエリ文字列（loc優先、無ければname）
+  function nameQueryOf(item) {
+    return (item.loc || item.name || "").trim();
   }
 
   // しおりデータの多言語タイトル（6e 追記）: 言語切替時、titles[新言語] が無い/空、または
@@ -4219,7 +4298,9 @@
           auto: true,
           approx: !!approx,
           unresolved: !!unresolved,
-          arriveTz: ""
+          arriveTz: "",
+          names: {},
+          noteNames: {}
         }
       });
     }
@@ -5526,7 +5607,13 @@
 
   function exportTripCsv() {
     var L = lang();
-    var rows = [CSV_COLUMNS.concat(CSV_OPTIONAL_COLUMNS)];
+    // CSVタイトル行（8 追記）: 本文の1行目に "title,<タイトル>" の2フィールド行を出力する。
+    // タイトルはCSVにこれまで一切含まれておらず、新規しおりへのインポートでタイトルが
+    // 引き継がれず既定の「新しい旅行」等のままになる問題があったための対応。
+    // 値は tripDisplayTitle(trip)（titles[現在言語] || title）。旧バージョンの本アプリは
+    // この行を「day」で始まらない＝ヘッダー行不一致として扱い読み込めなくなるため、
+    // 後方互換のためインポート側で明示的に検出する（parseTripCsv参照）
+    var rows = [["title", tripDisplayTitle(trip)], CSV_COLUMNS.concat(CSV_OPTIONAL_COLUMNS)];
     trip.days.forEach(function (day, dayIdx) {
       var dayNum = dayIdx + 1;
       day.items.forEach(function (item) {
@@ -5686,6 +5773,19 @@
     return { kind: kind, item: { id: genId(), text: text, done: done, priv: priv }, listPriv: listPriv };
   }
 
+  // CSVタイトル行（8 追記）: newTrip に importedTitle を適用する。適用先は titles[現在言語]
+  // （現在言語が ja の場合は title も併せて更新し、ja を「基準」として扱う既存の設計 6e と揃える）。
+  // 空文字列（壊れた行・値なしの title 行）は何もしない（既存タイトルを不用意に消さない）
+  function applyImportedTripTitle(newTrip, importedTitle) {
+    if (!importedTitle) return;
+    if (!newTrip.titles) newTrip.titles = {};
+    var curLang = lang();
+    newTrip.titles[curLang] = importedTitle;
+    if (curLang === "ja") {
+      newTrip.title = importedTitle;
+    }
+  }
+
   function parseTripCsv(text) {
     var rows = parseCsvRows(text);
     var warnings = [];
@@ -5704,12 +5804,23 @@
       todosPriv: trip.todosPriv
     };
 
-    if (rows.length === 0) {
+    // CSVタイトル行（8 追記）: 1行目が "title,<値>" の2フィールド行ならタイトル行として取り込み、
+    // 2行目以降を従来どおり解析する（headerIdx をそのぶんずらす）。
+    // 後方互換: 1行目が day,date,... で始まる旧CSV（タイトル行なし）は headerIdx=0 のまま従来どおり
+    var headerIdx = 0;
+    var importedTitle = null;
+    if (rows.length > 0 && rows[0].length === 2 && (rows[0][0] || "").trim() === "title") {
+      importedTitle = (rows[0][1] || "").trim();
+      headerIdx = 1;
+    }
+
+    if (rows.length <= headerIdx) {
       newTrip.days.push({ date: "", startTime: "09:00", items: [] });
+      applyImportedTripTitle(newTrip, importedTitle);
       return { trip: normalizeTrip(newTrip), warnings: [1] };
     }
 
-    var header = rows[0].map(function (h) {
+    var header = rows[headerIdx].map(function (h) {
       return (h || "").trim();
     });
     var colIndex = {};
@@ -5722,6 +5833,7 @@
 
     if (missingRequired) {
       newTrip.days.push({ date: "", startTime: "09:00", items: [] });
+      applyImportedTripTitle(newTrip, importedTitle);
       return { trip: normalizeTrip(newTrip), warnings: [1] };
     }
 
@@ -5741,7 +5853,7 @@
     // listHeaderIdx: リストのヘッダー行の位置（-1 なら第2テーブル無し）
     var mainEnd = rows.length;
     var listHeaderIdx = -1;
-    for (var bi = 1; bi < rows.length; bi++) {
+    for (var bi = headerIdx + 1; bi < rows.length; bi++) {
       if (isBlankCsvRow(rows[bi])) {
         mainEnd = bi;
         // 空行の次がリストのヘッダー。空行だけで終わっている場合は第2テーブル無し
@@ -5759,7 +5871,7 @@
     var dayMap = {};
     var dayOrder = [];
 
-    for (var i = 1; i < mainEnd; i++) {
+    for (var i = headerIdx + 1; i < mainEnd; i++) {
       var lineNo = i + 1;
       var fields = rows[i];
 
@@ -5873,6 +5985,7 @@
       }
     }
 
+    applyImportedTripTitle(newTrip, importedTitle);
     return { trip: normalizeTrip(newTrip), warnings: warnings };
   }
 
