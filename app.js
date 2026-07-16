@@ -5371,6 +5371,26 @@
   // CSV往復でフラグが失われる（空の非公開リストは実害が無いため許容。SPEC 14参照）
   var CHECKLIST_CSV_OPTIONAL_COLUMNS = ["private", "listPrivate"];
 
+  // 「空行」の判定。アプリの出力は1フィールドの空行だが、手作業やExcelでの編集を経ると
+  // ",,,,,," や " "（空白のみ）になりうるため、全フィールドが空白のみなら空行とみなす
+  function isBlankCsvRow(fields) {
+    return fields.every(function (f) {
+      return (f || "").trim() === "";
+    });
+  }
+
+  // その行が持ち物・やることリスト（第2テーブル）のヘッダー行かどうか。
+  // 空行が失われたCSVでも第2テーブルを見つけられるようにするために使う
+  function isChecklistHeaderRow(fields) {
+    var names = {};
+    fields.forEach(function (f) {
+      names[(f || "").trim()] = true;
+    });
+    return CHECKLIST_CSV_COLUMNS.every(function (c) {
+      return names[c] === true;
+    });
+  }
+
   // RFC4180: フィールドに , " 改行のいずれかを含む場合のみ "..." で囲み、内部の " は "" にエスケープする
   function csvEscapeField(value) {
     var str = value == null ? "" : String(value);
@@ -5661,16 +5681,29 @@
       })
     );
 
-    // 持ち物リスト・やることリスト（10）: 行程CSVの後の最初の空行（フィールド1つで空文字の行）で
-    // 第2テーブルと区切る。空行が無ければ第2テーブル無し（従来どおり）
-    var blankIdx = -1;
+    // 持ち物リスト・やることリスト（10）: 行程CSVの後の空行で第2テーブルと区切る。
+    // 手作業やExcelでの編集を経ると空行は ",,,,,," や " "（空白のみ）になりうるため、
+    // 「全フィールドが空白のみの行」を空行とみなす（フィールド1つの完全な空行に限定しない）。
+    // さらに、空行が全く無い（詰めて追記された）場合に備え、リストのヘッダー行そのものも
+    // 区切りとして探す。どちらも見つからなければ第2テーブル無し（旧CSV・従来どおり）
+    // mainEnd: 行程テーブルが終わる位置（この行は含まない）
+    // listHeaderIdx: リストのヘッダー行の位置（-1 なら第2テーブル無し）
+    var mainEnd = rows.length;
+    var listHeaderIdx = -1;
     for (var bi = 1; bi < rows.length; bi++) {
-      if (rows[bi].length === 1 && rows[bi][0].trim() === "") {
-        blankIdx = bi;
+      if (isBlankCsvRow(rows[bi])) {
+        mainEnd = bi;
+        // 空行の次がリストのヘッダー。空行だけで終わっている場合は第2テーブル無し
+        listHeaderIdx = bi + 1 < rows.length ? bi + 1 : -1;
+        break;
+      }
+      if (isChecklistHeaderRow(rows[bi])) {
+        // 空行が失われたCSV。ヘッダー行の直前までが行程テーブル
+        mainEnd = bi;
+        listHeaderIdx = bi;
         break;
       }
     }
-    var mainEnd = blankIdx === -1 ? rows.length : blankIdx;
 
     var dayMap = {};
     var dayOrder = [];
@@ -5679,8 +5712,8 @@
       var lineNo = i + 1;
       var fields = rows[i];
 
-      // 完全な空行（フィールド1つで空文字）は警告なしで無視する
-      if (fields.length === 1 && fields[0].trim() === "") continue;
+      // 空行（カンマだけの行・空白のみの行を含む）は警告なしで無視する
+      if (isBlankCsvRow(fields)) continue;
 
       if (fields.length <= maxColIdx) {
         warnings.push(lineNo);
@@ -5724,8 +5757,8 @@
 
     // 持ち物リスト・やることリスト（10）: 第2テーブルが見つかり、ヘッダーが list,text,done を
     // 満たしていれば packing/todos を置換する。見つからなければ冒頭で引き継いだ既存値を維持する
-    if (blankIdx !== -1 && blankIdx + 1 < rows.length) {
-      var listHeader = rows[blankIdx + 1].map(function (h) {
+    if (listHeaderIdx !== -1) {
+      var listHeader = rows[listHeaderIdx].map(function (h) {
         return (h || "").trim();
       });
       var listColIndex = {};
@@ -5751,11 +5784,11 @@
         var newTodosPriv = false;
         var packingPrivSet = false;
         var todosPrivSet = false;
-        for (var j = blankIdx + 2; j < rows.length; j++) {
+        for (var j = listHeaderIdx + 1; j < rows.length; j++) {
           var listLineNo = j + 1;
           var listFields = rows[j];
 
-          if (listFields.length === 1 && listFields[0].trim() === "") continue;
+          if (isBlankCsvRow(listFields)) continue;
 
           if (listFields.length <= listMaxColIdx) {
             warnings.push(listLineNo);
