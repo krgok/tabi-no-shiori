@@ -5879,12 +5879,15 @@
       todosPriv: trip.todosPriv
     };
 
-    // CSVタイトル行（8 追記）: 1行目が "title,<値>" の2フィールド行ならタイトル行として取り込み、
+    // CSVタイトル行（8 追記）: 1行目が "title,<値>" ならタイトル行として取り込み、
     // 2行目以降を従来どおり解析する（headerIdx をそのぶんずらす）。
-    // 後方互換: 1行目が day,date,... で始まる旧CSV（タイトル行なし）は headerIdx=0 のまま従来どおり
+    // 後方互換: 1行目が day,date,... で始まる旧CSV（タイトル行なし）は headerIdx=0 のまま従来どおり。
+    // フィールド数を2に限定しないこと: Excelで保存すると他の行の列数に合わせて
+    // "title,タイ家族旅行2026年,,,,,,,,,,,,," のように末尾がカンマ埋めされ2フィールドにならない。
+    // 1列目が "title" で2列目に値があればタイトル行とみなし、3列目以降の空フィールドは無視する
     var headerIdx = 0;
     var importedTitle = null;
-    if (rows.length > 0 && rows[0].length === 2 && (rows[0][0] || "").trim() === "title") {
+    if (rows.length > 0 && rows[0].length >= 2 && (rows[0][0] || "").trim() === "title") {
       importedTitle = (rows[0][1] || "").trim();
       headerIdx = 1;
     }
