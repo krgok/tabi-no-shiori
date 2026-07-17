@@ -223,6 +223,24 @@
     return pad2(h) + ":" + pad2(mi);
   }
 
+  // 日付を "YYYY-MM-DD" に正規化する。<input type="date"> はこの形式しか受け付けず、
+  // 他の形式を渡すと値が空になって日付が消えたように見えるため、読み込み時に必ず通す。
+  // Excelや手作業で編集したCSVは "2026/7/24" のようにスラッシュ区切り・月日が1桁になりやすい。
+  // 日付として解釈できない値は「捨てずにそのまま返す」: 読み込み時にユーザーのデータを
+  // 黙って消さないことを優先する（表示できないだけで、データは失われない）
+  function normalizeDateStr(v) {
+    if (typeof v !== "string") return "";
+    var s = v.trim();
+    if (!s) return "";
+    var m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(s);
+    if (!m) return s;
+    var y = parseInt(m[1], 10);
+    var mo = parseInt(m[2], 10);
+    var d = parseInt(m[3], 10);
+    if (isNaN(y) || isNaN(mo) || isNaN(d) || mo < 1 || mo > 12 || d < 1 || d > 31) return s;
+    return y + "-" + pad2(mo) + "-" + pad2(d);
+  }
+
   function sleep(ms) {
     return new Promise(function (resolve) {
       setTimeout(resolve, ms);
@@ -732,8 +750,13 @@
         // 編集できる共有リンク（18）: マージ時のアンカー（「直前の日のid」）に使う安定id。
         // 旧データ（この機能より前に作られたしおり）には無いため、無ければ発行する
         id: typeof d.id === "string" && d.id ? d.id : genId(),
-        date: typeof d.date === "string" ? d.date : "",
-        startTime: typeof d.startTime === "string" && d.startTime ? d.startTime : "09:00",
+        // "2026/7/24" のようなスラッシュ区切り・1桁の月日も "2026-07-24" に正規化する。
+        // <input type="date"> は "YYYY-MM-DD" しか受け付けず、他の形式だと表示が空になるため
+        date: normalizeDateStr(d.date),
+        // "7:00" のような1桁の時も "07:00" に正規化する（date と同じ理由。
+        // <input type="time"> は "HH:MM" しか受け付けず、他の形式だと表示が空になる）。
+        // 解釈できない値は既定の "09:00" にフォールバックする
+        startTime: normalizeFixedStart(d.startTime) || "09:00",
         // 時差対応（13）: IANAタイムゾーン文字列。既定 ""＝時差計算なし。文字列のみ許容する防御的正規化
         tz: typeof d.tz === "string" ? d.tz : "",
         // 非公開マーク（14拡張）: その日を丸ごと非公開。既定 false。boolean 以外は防御的にフォールバック
