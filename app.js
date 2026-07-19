@@ -1233,7 +1233,12 @@
   // 1件の trips エントリを Firestore に書き込む（新規なら作成して cloudId を採番、既存なら更新）。即時実行。
   // trip 本体は JSON 文字列にして保存する（ネスト構造のまま入れると型制約で事故りやすいため）
   // 公開層と公開URL（16）: publicId も併せて書き込み、端末間で公開状態を引き継げるようにする。
-  // 書き込み成功後、publicId を持つエントリなら公開コピー（publicTrips）もあわせて更新する（syncPublicCopyIfPublished）
+  // 公開コピー（publicTrips）はここでは更新しない（16 スナップショット方式）: 公開URLは
+  // 作成/明示更新した時点の内容で固定する仕様のため、オーナーの編集を自動反映すると
+  // 「渡した後に手直ししたら公開版から消えた」といった意図しない事故につながる。
+  // 更新したい場合は共有モーダルの「🔄 公開版を今の状態に更新」ボタン（syncPublicCopyIfPublished を手動呼び出し）を使う
+  // 編集できる共有リンク（18）: editTrips（共同編集用コピー）は従来どおり常時同期する（syncEditCopyIfEnabled）。
+  // こちらは「今まさに一緒に編集している相手に見せる」用途のため、公開URLとは逆に常時同期が正しい仕様
   // 編集できる共有リンク（18）: collabMode 中は自分の trips には一切書き込まない（多層ガード）
   function cloudUpsertEntry(entry) {
     if (!firebaseReady || !fbDb || !authUser || !entry || collabMode) return;
@@ -1266,7 +1271,6 @@
         .then(function () {
           entry.updatedAt = updatedAt;
           handleCloudSuccess();
-          syncPublicCopyIfPublished(entry);
           syncEditCopyIfEnabled(entry);
         })
         .catch(handleCloudError);
@@ -1280,7 +1284,6 @@
           persistLocalOnly(); // cloudId の採番結果を保存する（クラウド書き込みは誘発しない）
           if (el.tripsModal && !el.tripsModal.classList.contains("hidden")) renderTripsList();
           handleCloudSuccess();
-          syncPublicCopyIfPublished(entry);
           syncEditCopyIfEnabled(entry);
         })
         .catch(handleCloudError)
@@ -1291,11 +1294,18 @@
     }
   }
 
-  // 公開層と公開URL（16）: entry.publicId があるときだけ、公開コピー（publicTrips/{publicId}）を
-  // 常にサニタイズ済みデータで上書きする。既存の cloud sync デバウンス処理（scheduleCloudSync → cloudUpsertEntry）に
-  // 相乗りするため、公開中のしおりを編集すれば自動的に公開コピーも更新される
-  function syncPublicCopyIfPublished(entry) {
-    if (!entry || !entry.publicId || !firebaseReady || !fbDb || !authUser) return;
+  // 公開層と公開URL（16・スナップショット方式）: entry.publicId があるときだけ、公開コピー
+  // （publicTrips/{publicId}）を今この瞬間のサニタイズ済みデータで上書きする。
+  // cloudUpsertEntry の成功ハンドラからはもう自動で呼ばれない（公開URLは「作成/明示更新した時点の
+  // 内容で固定」が仕様のため）。呼び出し元は共有モーダルの「🔄 公開版を今の状態に更新」ボタン
+  // （onSharePublicRefreshClick）のみ。公開トグルON時の初回作成は publishCurrentTrip が
+  // 別途自前でスナップショットを書き込む（publicId 未採番のため add() が必要なのと、
+  // 成功後に publicId をローカル・プライベート層へ保存する処理を伴うため、この関数とは別実装）
+  function syncPublicCopyIfPublished(entry, onDone) {
+    if (!entry || !entry.publicId || !firebaseReady || !fbDb || !authUser) {
+      if (typeof onDone === "function") onDone(false);
+      return;
+    }
     var sanitized = sanitizeTripForPublic(entry.data);
     fbDb
       .collection(CLOUD_PUBLIC_TRIPS_COLLECTION)
@@ -1310,8 +1320,14 @@
         },
         { merge: true }
       )
-      .then(handleCloudSuccess)
-      .catch(handleCloudError);
+      .then(function () {
+        handleCloudSuccess();
+        if (typeof onDone === "function") onDone(true);
+      })
+      .catch(function (err) {
+        handleCloudError(err);
+        if (typeof onDone === "function") onDone(false);
+      });
   }
 
   // JSON文字列のUTF-8バイト長を返す（Firestoreルールの data.size() 判定に合わせる）
@@ -1795,14 +1811,15 @@
     el.publicPreviewContent = document.getElementById("publicPreviewContent");
     el.publicPreviewExcluded = document.getElementById("publicPreviewExcluded");
 
-    // 公開層と公開URL（16）: 共有モーダルの「🌐 公開する」セクション（ログイン時のみ）
+    // 共有（7・16統合）: ログイン時は #p= 方式（クラウド・固定スナップショット）、未ログイン時は #d= 方式
+    // （URL埋め込み）に自動切替する。sharePublicSection は「固定方式」の補足説明・更新・停止のみを担う
+    // （URL自体は共通の shareUrl/shareCopyBtn に表示する）
     el.sharePublicSection = document.getElementById("sharePublicSection");
-    el.sharePublicToggle = document.getElementById("sharePublicToggle");
-    el.sharePublicBadge = document.getElementById("sharePublicBadge");
     el.sharePublicExcluded = document.getElementById("sharePublicExcluded");
-    el.sharePublicUrlWrap = document.getElementById("sharePublicUrlWrap");
-    el.sharePublicUrl = document.getElementById("sharePublicUrl");
-    el.sharePublicCopyBtn = document.getElementById("sharePublicCopyBtn");
+    // 共有中の内容を今の状態に更新するボタン（固定方式のため必要）
+    el.sharePublicRefreshBtn = document.getElementById("sharePublicRefreshBtn");
+    // 共有を停止（publicTrips のクラウドコピーを削除する。プライバシー上の取り消し導線）
+    el.sharePublicStopBtn = document.getElementById("sharePublicStopBtn");
     el.shareLoginHint = document.getElementById("shareLoginHint");
 
     // 編集できる共有リンク（18）: 共有モーダルの「✏️ 編集できるリンクを発行」セクション（ログイン時のみ）
@@ -3030,7 +3047,11 @@
     card.style.maxWidth = "none";
   }
 
+  // 公開URL閲覧（16）: 準備モーダルは閲覧モードでも開けるが（10参照）、
+  // サイズ記憶はUI設定とはいえ localStorage への書き込みには変わりないため、
+  // 「閲覧モードでは localStorage を一切変更しない」という絶対条件を優先してここでも viewOnly ガードを置く
   function savePrepModalSize() {
+    if (viewOnly) return;
     var card = el.prepModal.querySelector(".modal-prep");
     if (!card) return;
     var r = card.getBoundingClientRect();
@@ -3042,6 +3063,11 @@
     }
   }
 
+  // 準備リストへのクイックアクセス（10）: 公開URL閲覧（16）中もこのボタン・モーダルは表示したまま使える
+  // （タイムライン最下部までスクロールしなくても持ち物・やることリストを見落とさないため）。
+  // renderChecklistSection がチェックボックス/テキスト欄に viewOnly ガードを適用済みで、
+  // 🔒トグル・削除・追加欄・ドラッグハンドルは既存の body.view-only-mode スコープCSS
+  // （クラスセレクタのため main/prepModal 共通で効く）で非表示になるため、モーダルは自然に読み取り専用になる
   function openPrepModal() {
     renderChecklists();
     openModal(el.prepModal);
@@ -5105,25 +5131,71 @@
     openModal(el.settingsModal);
   }
 
+  // 共有（7・16統合）: 「共有リンク」と「🌐 公開する」を1つの『共有』機能に統合し、内部方式は
+  // ログイン有無で自動切替する（ログイン済み→#p= のクラウド短縮URL・固定スナップショット、
+  // 未ログイン→#d= のURL埋め込み）。ユーザーは方式の違いを意識しない1本のリンク欄として使う
   function openShareModal() {
     // 編集できる共有リンク（18）: collabMode 中は共有モーダルを開かない（自分のしおりではないため。
     // getCurrentEntry() が別人のローカルしおりを指しかねない多層ガード）
     if (viewOnly || collabMode) return;
-    // 非公開マークと公開用データ（14）: 共有リンクに埋め込むのは trip 全体そのままではなく、
-    // sanitizeTripForPublic の結果（priv/notePriv を反映した公開コピー）にする。
-    // これにより非公開マークを付けた部分は共有リンクを渡しても見えなくなる
-    var publicData = sanitizeTripForPublic(trip);
-    var json = JSON.stringify(publicData);
-    var encoded = toBase64Url(json);
-    var url = window.location.origin + window.location.pathname + "#d=" + encoded;
-    el.shareUrl.value = url;
-    renderShareModalPublicSection();
+    renderShareUrlForCurrentState();
     renderShareModalEditSection();
     openModal(el.shareModal);
   }
 
-  // 公開層と公開URL（16）: 共有モーダルの「🌐 公開する」セクションを、現在の authUser / publicId に合わせて更新する。
-  // 未ログイン時は「ログインすると短い公開リンクを発行できます」の案内のみ表示する
+  // 非公開マークと公開用データ（14）: 共有リンクに埋め込むのは trip 全体そのままではなく、
+  // sanitizeTripForPublic の結果（priv/notePriv を反映した公開コピー）にする。
+  // これにより非公開マークを付けた部分は共有リンクを渡しても見えなくなる
+  function buildEmbeddedShareUrl() {
+    var publicData = sanitizeTripForPublic(trip);
+    var json = JSON.stringify(publicData);
+    var encoded = toBase64Url(json);
+    return window.location.origin + window.location.pathname + "#d=" + encoded;
+  }
+
+  // 共有（7・16統合）: 現在の authUser / publicId に応じて、共有モーダル冒頭のリンク欄（shareUrl）を
+  // 埋め込み式（#d=）とクラウド短縮式（#p=）のどちらで満たすか決める中核関数。
+  // 未ログイン時: 従来どおり #d= を即座に生成して表示する
+  // ログイン時かつ未発行: その場で publishCurrentTrip を自動実行し、完了を待って #p= を表示する
+  //   （＝共有＝クラウド発行が既定。ユーザーは「公開する/しない」を意識しない）
+  // ログイン時かつ発行済み: 既存の publicId から #p= を組み立てて即表示する
+  function renderShareUrlForCurrentState() {
+    if (!authUser || !firebaseReady) {
+      el.shareUrl.value = buildEmbeddedShareUrl();
+      if (el.sharePublicSection) el.sharePublicSection.classList.add("hidden");
+      if (el.shareLoginHint) el.shareLoginHint.classList.remove("hidden");
+      if (el.shareCopyBtn) el.shareCopyBtn.disabled = false;
+      return;
+    }
+    if (el.shareLoginHint) el.shareLoginHint.classList.add("hidden");
+
+    var entry = getCurrentEntry();
+    if (entry && entry.publicId) {
+      renderShareModalPublicSection();
+      if (el.shareCopyBtn) el.shareCopyBtn.disabled = false;
+      return;
+    }
+
+    // ログイン済みだが未発行: その場で自動的に共有リンクを発行する
+    if (el.sharePublicSection) el.sharePublicSection.classList.add("hidden");
+    el.shareUrl.value = t("share.generating");
+    if (el.shareCopyBtn) el.shareCopyBtn.disabled = true;
+    publishCurrentTrip(function (ok) {
+      // 発行完了までの間にモーダルが閉じられていたら、閉じた後のUIを上書きしない
+      if (!el.shareModal || el.shareModal.classList.contains("hidden")) return;
+      if (el.shareCopyBtn) el.shareCopyBtn.disabled = false;
+      if (ok) {
+        renderShareModalPublicSection();
+      } else {
+        // 発行に失敗した場合は埋め込み式（#d=）にフォールバックする（未ログイン時と同じ経路）
+        el.shareUrl.value = buildEmbeddedShareUrl();
+      }
+    });
+  }
+
+  // 共有（7・16統合）: 共有モーダルの補足セクション（固定方式の説明・除外件数・更新/停止ボタン）を、
+  // 現在の authUser / publicId に合わせて更新する。リンク本体は shareUrl（共通欄）に書き込む。
+  // 未ログイン時は「ログインすると短いリンクを発行できます」の案内のみ表示する
   function renderShareModalPublicSection() {
     if (!el.sharePublicSection) return;
     if (!authUser || !firebaseReady) {
@@ -5132,17 +5204,14 @@
       return;
     }
     if (el.shareLoginHint) el.shareLoginHint.classList.add("hidden");
-    el.sharePublicSection.classList.remove("hidden");
 
     var entry = getCurrentEntry();
     var isPublished = !!(entry && entry.publicId);
-    el.sharePublicToggle.checked = isPublished;
-    el.sharePublicBadge.classList.toggle("hidden", !isPublished);
-    el.sharePublicUrlWrap.classList.toggle("hidden", !isPublished);
+    el.sharePublicSection.classList.toggle("hidden", !isPublished);
 
     if (isPublished) {
       var url = window.location.origin + window.location.pathname + "#p=" + encodeURIComponent(entry.publicId);
-      el.sharePublicUrl.value = url;
+      el.shareUrl.value = url;
       var sanitized = sanitizeTripForPublic(entry.data);
       var excluded = countSanitizedExclusions(entry.data, sanitized);
       el.sharePublicExcluded.textContent =
@@ -5153,21 +5222,40 @@
     }
   }
 
-  // 共有モーダルの「🌐 公開する」トグル操作。二重送信防止のため通信中はトグルを一時的に無効化する
-  function onSharePublicToggleChange() {
+  // 公開層と公開URL（16・スナップショット方式）: 共有モーダルの「🔄 今の状態に更新」ボタン。
+  // 共有リンクは作成/明示更新した時点の内容で固定される仕様のため、オーナーが後から行程を編集・
+  // 🔒トグルを付け外ししても自動反映されない。最新化したいときはこのボタンで
+  // 明示的に syncPublicCopyIfPublished を呼び、今この瞬間の sanitizeTripForPublic 結果で上書きする
+  function onSharePublicRefreshClick() {
     if (viewOnly || collabMode || !authUser || !firebaseReady) return;
-    var wantOn = el.sharePublicToggle.checked;
-    el.sharePublicToggle.disabled = true;
-    var onDone = function () {
-      el.sharePublicToggle.disabled = false;
-      renderShareModalPublicSection();
-      if (el.tripsModal && !el.tripsModal.classList.contains("hidden")) renderTripsList();
-    };
-    if (wantOn) {
-      publishCurrentTrip(onDone);
-    } else {
-      unpublishCurrentTrip(onDone);
-    }
+    var entry = getCurrentEntry();
+    if (!entry || !entry.publicId) return;
+    if (el.sharePublicRefreshBtn) el.sharePublicRefreshBtn.disabled = true;
+    syncPublicCopyIfPublished(entry, function (ok) {
+      if (el.sharePublicRefreshBtn) el.sharePublicRefreshBtn.disabled = false;
+      if (ok) {
+        showToast(t("share.publicRefreshed"));
+        renderShareModalPublicSection(); // 除外件数の表示も現在の内容に合わせて更新する
+      }
+    });
+  }
+
+  // 共有（7・16統合）: 共有モーダルの「共有を停止」ボタン。publicTrips のクラウドコピーを削除し、
+  // 停止後は未ログイン時と同じ埋め込み式（#d=）にフォールバック表示する（プライバシー上の取り消し導線。
+  // 再度クラウド短縮リンクが欲しければモーダルを開き直せば自動的にまた発行される）
+  function onSharePublicStopClick() {
+    if (viewOnly || collabMode || !authUser || !firebaseReady) return;
+    var entry = getCurrentEntry();
+    if (!entry || !entry.publicId) return;
+    if (el.sharePublicStopBtn) el.sharePublicStopBtn.disabled = true;
+    unpublishCurrentTrip(function (ok) {
+      if (el.sharePublicStopBtn) el.sharePublicStopBtn.disabled = false;
+      if (ok) {
+        if (el.sharePublicSection) el.sharePublicSection.classList.add("hidden");
+        el.shareUrl.value = buildEmbeddedShareUrl();
+        if (el.tripsModal && !el.tripsModal.classList.contains("hidden")) renderTripsList();
+      }
+    });
   }
 
   // 編集できる共有リンク（18）: 共有モーダルの「✏️ 編集できるリンクを発行」セクションを、
@@ -6612,14 +6700,10 @@
     });
     el.sharePreviewBtn.addEventListener("click", openPublicPreviewModal);
 
-    // 公開層と公開URL（16）
-    if (el.sharePublicToggle) el.sharePublicToggle.addEventListener("change", onSharePublicToggleChange);
-    if (el.sharePublicCopyBtn) {
-      el.sharePublicCopyBtn.addEventListener("click", function () {
-        copyToClipboard(el.sharePublicUrl.value);
-        showToast(t("share.copied"));
-      });
-    }
+    // 共有（7・16統合）: リンク本体は shareCopyBtn/shareUrl（共通欄）を共用する。
+    // ここでは固定方式の更新・停止のみを扱う
+    if (el.sharePublicRefreshBtn) el.sharePublicRefreshBtn.addEventListener("click", onSharePublicRefreshClick);
+    if (el.sharePublicStopBtn) el.sharePublicStopBtn.addEventListener("click", onSharePublicStopClick);
     if (el.viewOnlyBackBtn) el.viewOnlyBackBtn.addEventListener("click", exitViewOnlyMode);
 
     // 編集できる共有リンク（18）

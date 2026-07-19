@@ -181,26 +181,24 @@
     <p class="share-private-note" data-i18n="share.privateNote">このリンクには非公開項目は含まれません。</p>
     <textarea id="shareUrl" class="share-url" readonly rows="4"></textarea>
     <div class="modal-actions">
-      <button type="button" id="sharePreviewBtn" class="btn btn-outline" data-i18n="share.previewButton">🔍 公開時の見え方を確認</button>
+      <button type="button" id="sharePreviewBtn" class="btn btn-outline" data-i18n="share.previewButton">🔍 共有時の見え方を確認</button>
       <button type="button" id="shareCopyBtn" class="btn btn-primary" data-i18n="share.copy">リンクをコピー</button>
     </div>
 
     <hr class="share-divider">
 
-    <!-- 公開層と公開URL（16）: ログイン時のみ表示。未ログイン時は下の案内のみ -->
+    <!-- 共有（旧: 公開層16のスナップショット方式）: ログイン時のみ表示。未ログイン時は下の案内のみ。
+         ログイン時はモーダルを開いた時点で自動的に #p= リンクを発行し、上の共有欄（shareUrl/shareCopyBtn）に
+         表示する。この区画は「固定方式」の補足説明・更新・停止のみを担う -->
     <div id="sharePublicSection" class="share-public-section hidden">
-      <label class="share-public-toggle-row">
-        <input type="checkbox" id="sharePublicToggle">
-        <span data-i18n="share.publicToggleLabel">🌐 公開する（短い公開リンクを発行）</span>
-      </label>
-      <p id="sharePublicBadge" class="share-public-badge hidden" data-i18n="share.publicBadge">🌐 公開中</p>
+      <p class="share-private-note" data-i18n="share.publicFixedNote">🔗 このリンクは作成・更新した時点の内容で固定されます。あとで行程を編集しても自動では反映されません。最新の内容にするには下の「更新」ボタンを押してください。</p>
       <p id="sharePublicExcluded" class="share-public-excluded hidden"></p>
-      <div id="sharePublicUrlWrap" class="share-public-url-wrap hidden">
-        <textarea id="sharePublicUrl" class="share-url" readonly rows="2"></textarea>
-        <button type="button" id="sharePublicCopyBtn" class="btn btn-outline" data-i18n="share.copy">リンクをコピー</button>
+      <div class="modal-actions">
+        <button type="button" id="sharePublicRefreshBtn" class="btn btn-outline" data-i18n="share.publicRefreshButton">🔄 今の状態に更新</button>
+        <button type="button" id="sharePublicStopBtn" class="btn btn-outline" data-i18n="share.publicStopButton">共有を停止</button>
       </div>
     </div>
-    <p id="shareLoginHint" class="share-login-hint hidden" data-i18n="share.loginHint">ログインすると短い公開リンクを発行できます。</p>
+    <p id="shareLoginHint" class="share-login-hint hidden" data-i18n="share.loginHint">ログインすると短いリンクを発行できます。</p>
 
     <hr class="share-divider">
 

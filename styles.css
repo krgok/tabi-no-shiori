@@ -2310,7 +2310,10 @@ select {
    body.view-only-mode の間だけ、編集系UIをまとめて非表示にする。
    app.js 側は saveState() の no-op ガードと各操作関数の viewOnly ガードで
    「データを絶対に書き換えない」ことを保証しており、こちらは見た目の責務のみを持つ（二重の防御）。
-   非表示にしないもの: 言語切替・地図表示・PDF出力・日タブ（閲覧）・チェックボックス（disabledで読み取り専用）
+   非表示にしないもの: 言語切替・地図表示・PDF出力・日タブ（閲覧）・チェックボックス（disabledで読み取り専用）・
+   準備リストへのクイックアクセス（10・#prepBtn。閲覧者もタイムライン最下部までスクロールせずに
+   持ち物・やることリストを見られるよう、あえて表示のままにする。モーダル内は下記の
+   .checklist-priv-toggle 等のクラスセレクタが main/prepModal 両方に効くため読み取り専用が保たれる）
    =========================================================== */
 
 /* 追加フォーム・チェックリストの追加欄 */
@@ -2319,11 +2322,11 @@ body.view-only-mode .checklist-add-row,
 /* ルート検討・地図更新（自分のデータを書き換えるボタン） */
 body.view-only-mode #routeBtn,
 body.view-only-mode #mapUpdateBtn,
-/* ヘッダーの編集系ボタン（共有・CSV入出力・しおり一覧・持ち物モーダル・設定・ログイン） */
+/* ヘッダーの編集系ボタン（共有・CSV入出力・しおり一覧・設定・ログイン）。
+   #prepBtn（🧳 準備リスト）は意図的にここに含めない（10参照。閲覧モードでも開けるようにする） */
 body.view-only-mode #shareBtn,
 body.view-only-mode #textioBtn,
 body.view-only-mode #tripsBtn,
-body.view-only-mode #prepBtn,
 body.view-only-mode #settingsBtn,
 body.view-only-mode #authBtn,
 /* 日タブの削除ボタン・日追加ボタン */
