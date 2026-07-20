@@ -6218,7 +6218,7 @@
     return first + " " + t("timeline.timeSep") + " " + last;
   }
 
-  function buildPrintItemRow(item, timed, numMap) {
+  function buildPrintItemRow(item, timed, numMap, day, idx) {
     var row = document.createElement("div");
     row.className = "print-item cat-" + item.cat;
 
@@ -6229,6 +6229,22 @@
     parts.push(timeStr);
 
     if (item.cat === "move") {
+      // 移動の区間名も印刷する（従来は手段と所要時間だけで「どこからどこへ」が出ていなかった）。
+      // 画面と同じく、前後のスポットから翻訳込みの「A → B」を組み立てられればそれを使う
+      var moveName = item.name || "";
+      if (day) {
+        var nb = findAdjacentStops(day, idx);
+        if (nb && nb.prev && nb.next) {
+          moveName = localizedStopName(nb.prev) + " → " + localizedStopName(nb.next);
+        } else {
+          var moveLocalized =
+            item.names && typeof item.names[lang()] === "string" ? item.names[lang()] : null;
+          if (moveLocalized && !isEffectivelySameText(moveLocalized, item.name)) {
+            moveName = item.name + "（" + moveLocalized + "）";
+          }
+        }
+      }
+      if (moveName) parts.push(moveName);
       var modeLabel = window.I18N.MODE_NAMES[lang()][item.mode] || "";
       var moveStr = modeLabel + " " + (item.dur || 0) + window.I18N.DURATION_UNITS[lang()];
       if (timed.moveTzDiff != null) {
@@ -6241,7 +6257,8 @@
       var icon = window.I18N.CATEGORY_ICONS[item.cat] || "";
       var nameStr = (icon ? icon + " " : "") + (item.name || "");
       var localized = item.names && typeof item.names[lang()] === "string" ? item.names[lang()] : null;
-      if (localized && localized !== item.name) {
+      // 画面側と同じ判定にする（原文と実質同じ訳は併記しない）
+      if (localized && !isEffectivelySameText(localized, item.name)) {
         nameStr += "（" + localized + "）";
       }
       parts.push(nameStr);
@@ -6256,7 +6273,14 @@
     if (item.note) {
       var noteLine = document.createElement("div");
       noteLine.className = "print-item-note";
-      noteLine.textContent = item.note;
+      // メモの多言語表示（3c 追記）: 画面と同じく、翻訳があれば原文に併記する。
+      // 原文と実質同じ訳（同言語への無意味な翻訳）は出さない
+      var noteLocalized =
+        item.noteNames && typeof item.noteNames[lang()] === "string" ? item.noteNames[lang()] : null;
+      noteLine.textContent =
+        noteLocalized && !isEffectivelySameText(noteLocalized, item.note)
+          ? item.note + "（" + noteLocalized + "）"
+          : item.note;
       row.appendChild(noteLine);
     }
 
@@ -6278,8 +6302,8 @@
     var numMap = getItineraryNumberMap(day);
     var list = document.createElement("div");
     list.className = "print-day-items";
-    getDayTimedItems(day).forEach(function (timed) {
-      list.appendChild(buildPrintItemRow(timed.item, timed, numMap));
+    getDayTimedItems(day).forEach(function (timed, idx) {
+      list.appendChild(buildPrintItemRow(timed.item, timed, numMap, day, idx));
     });
     section.appendChild(list);
 
