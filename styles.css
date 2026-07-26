@@ -778,13 +778,27 @@ select {
 
 .item-name-row {
   display: flex;
-  align-items: center;
+  /* タイトルが複数行に伸びたとき、横の🔗やカテゴリータグが中央に浮かず1行目に揃うようにする */
+  align-items: flex-start;
   gap: 6px;
+  /* これが無いと中の textarea の min-content 幅で行が縮み、名前欄が潰れて
+     モバイルでタイトルが極端に折り返される */
+  min-width: 0;
+}
+
+/* 操作ボタン（🔒複製削除）のラッパー。既定（PC幅）は横並びで従来の見た目を保つ。
+   モバイル幅では @media (max-width:480px) で縦1列に切り替える */
+.item-action-col {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: none;
 }
 
 .item-name {
   flex: 1;
   min-width: 0;
+  width: 100%;
   border: none;
   background: transparent;
   font-size: 1rem;
@@ -793,6 +807,12 @@ select {
   padding: 3px 6px;
   border-radius: var(--radius-sm);
   outline: none;
+  /* 長いタイトルを折り返して全文見せる。高さは autoGrowNote() が内容に合わせて設定するため
+     内部スクロールバーは出さず、手動リサイズのつまみも不要 */
+  resize: none;
+  overflow: hidden;
+  line-height: 1.35;
+  font-family: inherit;
 }
 
 .item-name:focus,
@@ -2126,6 +2146,14 @@ select {
   .item-time-col {
     width: 44px;
     font-size: 0.66rem;
+  }
+
+  /* モバイルでは横幅が狭く、右側の🔒・複製・削除ボタンが名前と同じ行で幅を奪うと
+     長いタイトルが極端に縦へ伸びる。ボタン類を縦1列にまとめて名前欄に幅を回す */
+  .item-action-col {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .timeline::before {

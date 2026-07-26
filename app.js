@@ -2224,6 +2224,12 @@
   // 一度 auto に戻してから scrollHeight を読むことで、文字を消したときの縮小にも対応する
   function autoGrowNote(ta) {
     ta.style.height = "auto";
+    // 高さを auto に戻した後、scrollHeight を読む前に一度レイアウトを確定させる。
+    // flex レイアウト内の textarea は幅が後から広がることがあり、幅が狭いまま
+    // scrollHeight を測ると桁違いに大きい高さになる（33文字が719pxになる等）。
+    // offsetWidth の読み取りで強制 reflow し、確定した幅で測る
+    /* eslint-disable-next-line no-unused-expressions */
+    ta.offsetWidth;
     ta.style.height = ta.scrollHeight + "px";
   }
 
@@ -2242,9 +2248,9 @@
       el.timeline.appendChild(buildItemCard(timed.item, timed.startMin, timed.endMin, day, idx, numMap, timed));
     });
 
-    // メモ欄の初期高さ合わせ。scrollHeight はDOMに入ってからでないと測れないためここで行う。
+    // 名前欄・メモ欄の初期高さ合わせ。scrollHeight はDOMに入ってからでないと測れないためここで行う。
     // requestAnimationFrame はタブ非アクティブ時に発火しないことがあるので同期実行する
-    Array.prototype.forEach.call(el.timeline.querySelectorAll(".item-note"), autoGrowNote);
+    Array.prototype.forEach.call(el.timeline.querySelectorAll(".item-name, .item-note"), autoGrowNote);
   }
 
   function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
@@ -2389,12 +2395,24 @@
     var nameRow = document.createElement("div");
     nameRow.className = "item-name-row";
 
-    var nameInput = document.createElement("input");
-    nameInput.type = "text";
+    // input ではなく textarea を使う。input は1行しか表示できず、モバイルの狭い幅では
+    // 長いタイトルが大きく見切れてしまうため。高さは autoGrowNote() が内容に合わせて調整する
+    var nameInput = document.createElement("textarea");
+    nameInput.rows = 1;
     nameInput.className = "item-name";
     nameInput.value = item.name;
     nameInput.placeholder = t("timeline.namePlaceholder");
     nameInput.readOnly = viewOnly; // 公開URL閲覧（16）: 読み取り専用モードでは編集不可
+    // タイトルは1行の想定なので Enter で改行を入れずに確定（フォーカスを外す）
+    nameInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        nameInput.blur();
+      }
+    });
+    nameInput.addEventListener("input", function () {
+      autoGrowNote(nameInput);
+    });
     nameInput.addEventListener("change", function () {
       var newName = nameInput.value;
       if (newName !== item.name) {
@@ -2735,6 +2753,11 @@
 
     card.appendChild(body);
 
+    // 操作ボタン（🔒複製削除）はラッパーにまとめる。モバイルでは縦1列にして
+    // 名前欄に横幅を回すため（.item-action-col のCSS参照）
+    var actionCol = document.createElement("div");
+    actionCol.className = "item-action-col";
+
     // 非公開マーク（14）: 項目まるごとの 🔓/🔒 トグル（複製・削除ボタンと並べて配置）
     var privBtn = document.createElement("button");
     privBtn.type = "button";
@@ -2748,7 +2771,7 @@
       saveState();
       render();
     });
-    card.appendChild(privBtn);
+    actionCol.appendChild(privBtn);
 
     var dupBtn = document.createElement("button");
     dupBtn.type = "button";
@@ -2759,7 +2782,7 @@
     dupBtn.addEventListener("click", function () {
       duplicateItem(item.id);
     });
-    card.appendChild(dupBtn);
+    actionCol.appendChild(dupBtn);
 
     var delBtn = document.createElement("button");
     delBtn.type = "button";
@@ -2769,7 +2792,9 @@
     delBtn.addEventListener("click", function () {
       deleteItem(item.id);
     });
-    card.appendChild(delBtn);
+    actionCol.appendChild(delBtn);
+
+    card.appendChild(actionCol);
 
     return card;
   }
