@@ -7235,9 +7235,46 @@
     }
   };
 
+  /* =========================================================
+   * PWA（オフライン対応）
+   * このアプリの価値は旅先（機内・電波の弱い場所）で発揮されるため、
+   * Service Worker でアプリ本体をキャッシュしてオフラインでも起動できるようにする。
+   * 登録に失敗しても通常のWebアプリとしてそのまま動く（機能の必須要件ではない）
+   * ========================================================= */
+  function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return;
+    // file:// で開いた場合は Service Worker を使えない（登録しようとすると例外になる）
+    if (window.location.protocol !== "http:" && window.location.protocol !== "https:") return;
+    try {
+      navigator.serviceWorker
+        .register("sw.js")
+        .then(function (reg) {
+          // 新しい版が来たら知らせる。黙って古いまま使い続けるのを防ぐ
+          reg.addEventListener("updatefound", function () {
+            var sw = reg.installing;
+            if (!sw) return;
+            sw.addEventListener("statechange", function () {
+              // controller があるとき = 既に旧版で動いていた ＝ これは「更新」
+              if (sw.state === "installed" && navigator.serviceWorker.controller) {
+                showActionToast(t("pwa.updated"), t("pwa.reload"), function () {
+                  window.location.reload();
+                });
+              }
+            });
+          });
+        })
+        .catch(function () {
+          /* 登録できなくても通常動作に支障はない */
+        });
+    } catch (e) {
+      /* 同上 */
+    }
+  }
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
   } else {
     init();
   }
+  registerServiceWorker();
 })();
