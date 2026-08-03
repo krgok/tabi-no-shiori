@@ -139,6 +139,9 @@
   // このタブ/セッションを識別するランダムID。editTrips への書き込み時に writerId として埋め込み、
   // onSnapshot で自分自身の書き込みのエコーを受信したときに無視してループを防ぐ（オーナー側・共同編集側で共用）
   var SESSION_WRITER_ID = genId() + genId();
+  // 共同編集の更新通知が連続して溜まらないようにする間隔
+  var COLLAB_NOTICE_MIN_INTERVAL_MS = 8000;
+  var lastCollabNoticeAt = 0;
   var collabMode = false; // #e=<editId> で起動した共同編集モード中か
   var collabEditId = null; // 共同編集中の editTrips ドキュメントID
   var collabOwnerUid = null; // 受信した editTrips ドキュメントの ownerUid（push時にそのまま維持する必要がある）
@@ -5723,6 +5726,13 @@
       // persistLocalOnly() を直接呼ぶ（scheduleCloudSync/scheduleCollabPush のどちらも起動しない）
       persistLocalOnly();
       render();
+      // 相手の変更が黙って画面に反映されると気づけないため、控えめに知らせる。
+      // 連続更新でトーストが溜まらないよう、直前の通知から一定時間は出さない
+      var now = Date.now();
+      if (now - lastCollabNoticeAt > COLLAB_NOTICE_MIN_INTERVAL_MS) {
+        lastCollabNoticeAt = now;
+        showToast(t("collab.remoteUpdated"));
+      }
     } finally {
       applyingRemoteEditUpdate = false;
     }
