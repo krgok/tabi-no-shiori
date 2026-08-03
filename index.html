@@ -269,6 +269,14 @@
       <button type="button" id="settingsDeleteBtn" class="btn btn-outline" data-i18n="settings.delete">削除</button>
       <button type="button" id="settingsSaveBtn" class="btn btn-primary" data-i18n="settings.save">保存</button>
     </div>
+    <div class="settings-backup-section">
+      <p class="settings-backup-note" data-i18n="settings.backupNote">しおりのデータだけを保存します（APIキーは含まれません）</p>
+      <div class="modal-actions">
+        <button type="button" id="settingsBackupBtn" class="btn btn-outline" data-i18n="settings.backup">💾 全データをファイルに保存</button>
+        <button type="button" id="settingsRestoreBtn" class="btn btn-outline" data-i18n="settings.restore">📂 ファイルから復元</button>
+        <input type="file" id="settingsRestoreInput" accept=".json,application/json" class="hidden">
+      </div>
+    </div>
   </div>
 </div>
 
