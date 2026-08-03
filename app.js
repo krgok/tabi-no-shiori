@@ -1869,6 +1869,7 @@
     el.settingsApiKeyInput = document.getElementById("settingsApiKeyInput");
     el.settingsSaveBtn = document.getElementById("settingsSaveBtn");
     el.settingsDeleteBtn = document.getElementById("settingsDeleteBtn");
+    el.tripCountdown = document.getElementById("tripCountdown");
     el.settingsBackupBtn = document.getElementById("settingsBackupBtn");
     el.settingsRestoreBtn = document.getElementById("settingsRestoreBtn");
     el.settingsRestoreInput = document.getElementById("settingsRestoreInput");
@@ -1975,10 +1976,39 @@
     if (el.collabBanner) el.collabBanner.classList.toggle("hidden", !collabMode);
   }
 
+  // 出発までの日数（カウントダウン）。Day1の日付を出発日とみなす。
+  // 日付は「その日の始まり」同士で比較する（時刻の影響を受けないように）
+  function tripCountdownDays() {
+    var firstDate = trip.days && trip.days[0] && trip.days[0].date;
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(firstDate || ""));
+    if (!m) return null;
+    var target = new Date(+m[1], +m[2] - 1, +m[3]);
+    var today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((target.getTime() - today.getTime()) / 86400000);
+  }
+
+  function renderCountdown() {
+    if (!el.tripCountdown) return;
+    var days = tripCountdownDays();
+    if (days == null) {
+      el.tripCountdown.classList.add("hidden");
+      el.tripCountdown.textContent = "";
+      return;
+    }
+    var text;
+    if (days > 0) text = t("countdown.until", { n: days });
+    else if (days === 0) text = t("countdown.today");
+    else return el.tripCountdown.classList.add("hidden"); // 過ぎた旅行では出さない
+    el.tripCountdown.textContent = text;
+    el.tripCountdown.classList.remove("hidden");
+  }
+
   function renderHeader() {
     if (document.activeElement !== el.tripTitle) {
       el.tripTitle.textContent = tripDisplayTitle(trip);
     }
+    renderCountdown();
   }
 
   function renderDayTabs() {
@@ -4933,6 +4963,15 @@
       item.appendChild(editBadge);
     }
 
+    var dupBtn = document.createElement("button");
+    dupBtn.type = "button";
+    dupBtn.className = "trip-list-item-duplicate";
+    dupBtn.textContent = "⧉";
+    dupBtn.setAttribute("aria-label", t("trips.duplicateAria"));
+    dupBtn.title = t("trips.duplicateAria");
+    dupBtn.dataset.id = entry.id;
+    item.appendChild(dupBtn);
+
     var archiveBtn = document.createElement("button");
     archiveBtn.type = "button";
     archiveBtn.className = "trip-list-item-archive";
@@ -5017,6 +5056,42 @@
     closeModal(el.tripsModal);
     render();
     syncEditListenerForCurrentTrip();
+  }
+
+  // しおりを丸ごと複製する（前回の旅行をテンプレートに次を作る用途）。
+  // 共有・編集リンク（publicId/editId）とクラウドID は引き継がない。
+  // 引き継ぐと複製が元の共有先に混ざってしまうため、複製は必ず「未共有の新しいしおり」になる
+  function duplicateTrip(id) {
+    if (viewOnly || collabMode) return;
+    var src = tripsStore.find(function (e) {
+      return e.id === id;
+    });
+    if (!src) return;
+    var copy = normalizeTrip(JSON.parse(JSON.stringify(src.data)));
+    // タイトルに「のコピー」を付けて元と区別できるようにする（表示中の言語のタイトルに付ける）
+    var L = lang();
+    var baseTitle = tripDisplayTitle(src.data) || "";
+    if (!copy.titles) copy.titles = {};
+    copy.titles[L] = t("trips.copySuffix", { title: baseTitle });
+    if (L === "ja") copy.title = copy.titles[L];
+    var newId = genId();
+    tripsStore.push({
+      id: newId,
+      data: copy,
+      archived: false,
+      cloudId: null,
+      updatedAt: Date.now(),
+      publicId: null,
+      editId: null
+    });
+    currentTripId = newId;
+    trip = copy;
+    currentDayIndex = 0;
+    saveState();
+    closeModal(el.tripsModal);
+    render();
+    syncEditListenerForCurrentTrip();
+    showToast(t("trips.duplicated"));
   }
 
   function createNewTrip() {
@@ -5146,6 +5221,12 @@
       } else {
         requestArchiveTrip(archiveBtn.dataset.id);
       }
+      return;
+    }
+    var dupBtn2 = e.target.closest(".trip-list-item-duplicate");
+    if (dupBtn2) {
+      e.stopPropagation();
+      duplicateTrip(dupBtn2.dataset.id);
       return;
     }
     var delBtn = e.target.closest(".trip-list-item-delete");
