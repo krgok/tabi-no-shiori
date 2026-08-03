@@ -21,6 +21,7 @@ const TEST_FILES = [
   "test-prep-viewonly.js",
   "test-safety.js",
   "test-phase3.js",
+  "test-pwa.js",
   "privtest.js"
 ];
 
