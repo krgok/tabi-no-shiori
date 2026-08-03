@@ -32,7 +32,12 @@ function assertEqual(actual, expected, msg) {
 // ---- ファイル読み込み ----
 let html = fs.readFileSync(path.join(PROJECT_DIR, "index.html"), "utf8");
 const i18nSrc = fs.readFileSync(path.join(PROJECT_DIR, "i18n.js"), "utf8");
-const appSrc = fs.readFileSync(path.join(PROJECT_DIR, "app.js"), "utf8");
+// app.js は js/ 配下に分割された。読み込み順どおりに結合して1つのソースとして扱う
+const APP_FILES = fs
+  .readdirSync(path.join(PROJECT_DIR, "js"))
+  .filter((f) => f.endsWith(".js"))
+  .sort();
+const appSrc = APP_FILES.map((f) => fs.readFileSync(path.join(PROJECT_DIR, "js", f), "utf8")).join(String.fromCharCode(10));
 const cssSrc = fs.readFileSync(path.join(PROJECT_DIR, "styles.css"), "utf8");
 
 // <script> タグは全部取り除き、後で手動で評価する（Leaflet/Firebaseの実ファイル読み込みも避ける）
@@ -61,9 +66,8 @@ const hookInjection = `
     openShareModal: function () { openShareModal(); }
   };
 `;
-const lastIdx = appSrc.lastIndexOf("})();");
-if (lastIdx === -1) throw new Error("could not find closing IIFE in app.js");
-const appSrcForTest = appSrc.slice(0, lastIdx) + hookInjection + appSrc.slice(lastIdx);
+// 分割後はIIFEが無くグローバルスコープなので、末尾にフックを足すだけでよい
+const appSrcForTest = appSrc + hookInjection;
 
 // ---- jsdom セットアップ ----
 const dom = new JSDOM(html, {

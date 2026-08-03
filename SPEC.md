@@ -8,7 +8,13 @@
 - `index.html` — マークアップ（UIの骨格、モーダル含む）
 - `styles.css` — 全スタイル
 - `i18n.js` — 4言語の翻訳辞書と言語切替ロジック（`window.I18N` を公開）
-- `app.js` — アプリ本体（状態管理、描画、ドラッグ&ドロップ、ルート計算、共有、入出力、地図）
+- `js/*.js` — アプリ本体。役割ごとに10ファイルへ分割（元は単一の app.js）。**読み込み順に依存**するため、
+  index.html / tests/harness.js / sw.js の並びを揃えて維持すること:
+  - `00-core.js` 定数・状態・ユーティリティ / `10-gmaps.js` Google Maps連携
+  - `20-data.js` ストレージ・正規化・公開用サニタイズ・共同編集マージ / `30-cloud.js` Firebase認証・同期・リンク発行
+  - `40-ui.js` DOM・描画・時差・チェックリスト・CRUD・ドラッグ / `50-route.js` ルート計算・位置解決・多言語名・地図
+  - `60-share.js` 複数しおり・共有/公開/編集リンクの受信 / `70-csv.js` CSV入出力・バックアップ
+  - `80-print.js` PDF・モーダル・トースト / `90-main.js` イベント登録・初期化・PWA
 - `vendor/leaflet/` — Leaflet 1.9.4 を同梱（leaflet.js / leaflet.css / images/）。CDN参照は不可
 - `vendor/firebase/` — Firebase JS SDK compat版 v12.16.0 を同梱（firebase-app-compat.js / firebase-auth-compat.js / firebase-firestore-compat.js）。Google ログイン＋Firestoreクラウド保存（15）用。CDN参照は不可
 
@@ -786,3 +792,12 @@ Google アカウントでログインすると、しおりのデータ（本人�
 - 新しい版を検知したら「新しいバージョンがあります［更新］」を表示する（黙って古い版を使い続けさせない）
 - Service Worker が使えない環境（非対応ブラウザ・`file://` で開いた場合）でも、通常のWebアプリとしてそのまま動く
 - `tests/test-pwa.js` が「index.html が読む資産がすべてプリキャッシュに入っているか」を静的に検査する。**1つでも漏れるとオフライン起動が壊れる**ため、資産を増やしたらCIがここで気づく
+
+### 22. app.js の分割（保守性）
+
+7,300行に達した `app.js` を、役割ごとに `js/` 配下の10ファイルへ分割した（1ファイル最大約1,900行）。
+
+- **ビルド不要を維持**するため、モジュール化やバンドラは導入しない。元の巨大IIFEを解いて各ファイルをグローバルスコープの通常スクリプトとし、`<script>` で順に読み込む
+- 分割時に**コードは1文字も変更していない**（切り出し前後で内容が完全一致することを確認済み）。関数の相互参照はグローバル経由でそのまま解決される
+- 事前に、トップレベルの識別子325個が `window` の既存プロパティ（`name`/`status`/`location` 等）と1つも衝突しないことを確認した上で実施している
+- 読み込み順に依存するため、**index.html・tests/harness.js・sw.js の3箇所で順序を揃える**必要がある。`tests/test-pwa.js` が index.html と sw.js の齟齬をCIで検知する

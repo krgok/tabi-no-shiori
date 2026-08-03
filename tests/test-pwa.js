@@ -115,8 +115,9 @@ section("6. manifest の内容とアイコン");
 
 section("7. Service Worker の登録");
 {
-  const app = fs.readFileSync(path.join(ROOT, "app.js"), "utf8");
-  ok(/navigator\.serviceWorker[\s\S]{0,80}\.register\("sw\.js"\)/.test(app), "app.js が sw.js を登録する");
+  // Service Worker の登録は分割後 js/90-main.js にある
+  const app = fs.readFileSync(path.join(ROOT, "js", "90-main.js"), "utf8");
+  ok(/navigator\.serviceWorker[\s\S]{0,80}\.register\("sw\.js"\)/.test(app), "アプリが sw.js を登録する");
   ok(/serviceWorker" in navigator/.test(app), "非対応ブラウザを判定している");
   ok(/location\.protocol !== "http:"/.test(app), "file:// で開いた場合は登録しない（例外を避ける）");
   ok(/pwa\.updated/.test(app), "新しい版が来たら通知する");
