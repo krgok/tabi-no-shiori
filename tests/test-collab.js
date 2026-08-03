@@ -512,6 +512,9 @@ function baseTrip(days, extra) {
     const saved = JSON.parse(ownerEnv.store[STORAGE_KEY]);
     const mergedData = saved.trips[0].data;
     ok(mergedData.days[0].items[0].name === "浅草寺(共同編集者が改名)", "共同編集者の変更がローカルに反映される");
+    // 相手の変更が黙って反映されると気づけないので通知が出る
+    const notice = [...ownerEnv.doc.querySelectorAll(".toast")].map((t) => t.textContent).join(" | ");
+    ok(/共同編集の変更を反映/.test(notice), "共同編集の更新が通知される", notice);
     ok(mergedData.days[0].items.some((i) => i.id === "s1" && i.priv === true), "非公開項目(s1)が失われずマージされている", mergedData.days[0].items);
     ok(ownerEnv.doc.querySelector('#timeline .item-card[data-id="a1"] .item-name').value === "浅草寺(共同編集者が改名)", "画面にも反映される");
 
