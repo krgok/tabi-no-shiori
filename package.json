@@ -1,0 +1,13 @@
+{
+  "name": "tabi-no-shiori",
+  "version": "1.0.0",
+  "private": true,
+  "description": "旅のしおり - 旅行の行程表（しおり）を作成・共有できるWebアプリ",
+  "scripts": {
+    "test": "node tests/run-all.js"
+  },
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}
