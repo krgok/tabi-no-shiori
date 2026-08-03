@@ -2584,3 +2584,50 @@ body.collab-mode .checklist-list-priv-toggle {
   color: var(--pink-dark);
   letter-spacing: 0.02em;
 }
+
+/* 上下移動ボタン（ドラッグの代替・日跨ぎ移動） */
+.item-nudge {
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  flex: none;
+}
+
+.item-nudge:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--pink-dark);
+}
+
+body.view-only-mode .item-nudge {
+  display: none;
+}
+
+/* クラウド同期の状態表示 */
+.trip-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 6px 2px 12px;
+}
+
+.trip-sub-row .trip-countdown {
+  margin: 0;
+}
+
+.sync-status {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  opacity: 0.85;
+}
+
+.sync-status.sync-status-error {
+  color: var(--warn);
+  opacity: 1;
+}

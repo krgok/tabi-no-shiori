@@ -20,6 +20,7 @@ const TEST_FILES = [
   "print-i18n-test.js",
   "test-prep-viewonly.js",
   "test-safety.js",
+  "test-phase3.js",
   "privtest.js"
 ];
 

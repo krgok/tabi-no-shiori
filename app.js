@@ -1172,6 +1172,7 @@
       ? { uid: user.uid, email: user.email || "", displayName: user.displayName || "", photoURL: user.photoURL || "" }
       : null;
     renderAuthUI();
+    renderSyncStatus();
     if (authUser && !wasLoggedIn) {
       cloudSyncErrorShown = false;
       runCloudMerge();
@@ -1197,8 +1198,43 @@
   }
 
   // 書き込み/読み込みエラーは静かに握りつぶすが、連続失敗時はトーストを1回だけ出す。成功したらフラグを戻す
+  // クラウド同期の状態表示（"…同期中" / "保存済み HH:MM" / エラー）。
+  // クラウドに保存されているか画面から分からないと不安なので、控えめに出す
+  var syncState = { kind: "idle", at: null };
+
+  function setSyncState(kind) {
+    syncState.kind = kind;
+    if (kind === "saved") syncState.at = new Date();
+    renderSyncStatus();
+  }
+
+  function renderSyncStatus() {
+    if (!el.syncStatus) return;
+    // ログインしていない/クラウド未使用のときは何も出さない（未ログインでも普通に使えるため）
+    if (!authUser || !firebaseReady || viewOnly || collabMode) {
+      el.syncStatus.classList.add("hidden");
+      el.syncStatus.textContent = "";
+      return;
+    }
+    var text = "";
+    if (syncState.kind === "syncing") text = t("sync.syncing");
+    else if (syncState.kind === "error") text = t("sync.error");
+    else if (syncState.kind === "saved" && syncState.at) {
+      text = t("sync.saved", { time: pad2(syncState.at.getHours()) + ":" + pad2(syncState.at.getMinutes()) });
+    }
+    if (!text) {
+      el.syncStatus.classList.add("hidden");
+      el.syncStatus.textContent = "";
+      return;
+    }
+    el.syncStatus.textContent = text;
+    el.syncStatus.classList.toggle("sync-status-error", syncState.kind === "error");
+    el.syncStatus.classList.remove("hidden");
+  }
+
   function handleCloudError(err) {
     console.warn("cloud sync failed", err && err.code);
+    setSyncState("error");
     if (!cloudSyncErrorShown) {
       cloudSyncErrorShown = true;
       showToast(t("auth.syncError"), "error");
@@ -1206,6 +1242,7 @@
   }
   function handleCloudSuccess() {
     cloudSyncErrorShown = false;
+    setSyncState("saved");
   }
 
   // JSON文字列を安全にパースする（壊れたデータ・型不正は null）
@@ -1242,6 +1279,7 @@
   // 編集できる共有リンク（18）: collabMode 中は自分の trips には一切書き込まない（多層ガード）
   function cloudUpsertEntry(entry) {
     if (!firebaseReady || !fbDb || !authUser || !entry || collabMode) return;
+    setSyncState("syncing");
     // 同じエントリの add（cloudId 採番）が実行中なら、完了を待ってから書き込み直す。
     // 待たずに進むと cloudId が未設定のまま再度 add され、クラウド上でしおりが重複する
     // （例: ログイン直後のマージによるアップロードが完了する前に公開トグルを押した場合）
@@ -1870,6 +1908,7 @@
     el.settingsSaveBtn = document.getElementById("settingsSaveBtn");
     el.settingsDeleteBtn = document.getElementById("settingsDeleteBtn");
     el.tripCountdown = document.getElementById("tripCountdown");
+    el.syncStatus = document.getElementById("syncStatus");
     el.settingsBackupBtn = document.getElementById("settingsBackupBtn");
     el.settingsRestoreBtn = document.getElementById("settingsRestoreBtn");
     el.settingsRestoreInput = document.getElementById("settingsRestoreInput");
@@ -2806,6 +2845,29 @@
     });
     actionCol.appendChild(privBtn);
 
+    // 上下ボタン: ドラッグが難しい場面の代替。端では隣の日へ移動する
+    var upBtn = document.createElement("button");
+    upBtn.type = "button";
+    upBtn.className = "item-nudge";
+    upBtn.textContent = "↑";
+    upBtn.title = t("timeline.moveUp");
+    upBtn.setAttribute("aria-label", t("timeline.moveUp"));
+    upBtn.addEventListener("click", function () {
+      nudgeItem(item.id, -1);
+    });
+    actionCol.appendChild(upBtn);
+
+    var downBtn = document.createElement("button");
+    downBtn.type = "button";
+    downBtn.className = "item-nudge";
+    downBtn.textContent = "↓";
+    downBtn.title = t("timeline.moveDown");
+    downBtn.setAttribute("aria-label", t("timeline.moveDown"));
+    downBtn.addEventListener("click", function () {
+      nudgeItem(item.id, 1);
+    });
+    actionCol.appendChild(downBtn);
+
     var dupBtn = document.createElement("button");
     dupBtn.type = "button";
     dupBtn.className = "item-duplicate";
@@ -3334,6 +3396,38 @@
       saveState();
       render();
     });
+  }
+
+  // 項目を1つ上/下へ動かす。ドラッグが使えない場面（キーボード操作・細かい調整）の補助。
+  // 端まで来たら前後の日へ移す（「この観光を2日目に回す」が複製+削除なしでできる）
+  function nudgeItem(id, dir) {
+    if (viewOnly) return;
+    var day = trip.days[currentDayIndex];
+    var idx = day.items.findIndex(function (it) {
+      return it.id === id;
+    });
+    if (idx === -1) return;
+    var target = idx + dir;
+    if (target >= 0 && target < day.items.length) {
+      // 同じ日の中で入れ替え
+      var tmp = day.items[idx];
+      day.items[idx] = day.items[target];
+      day.items[target] = tmp;
+      saveState();
+      render();
+      return;
+    }
+    // 端を越えたら隣の日へ移す（先頭より上→前日の末尾 / 末尾より下→翌日の先頭）
+    var destDayIdx = currentDayIndex + dir;
+    if (destDayIdx < 0 || destDayIdx >= trip.days.length) return;
+    var moved = day.items.splice(idx, 1)[0];
+    var destDay = trip.days[destDayIdx];
+    if (dir < 0) destDay.items.push(moved);
+    else destDay.items.unshift(moved);
+    currentDayIndex = destDayIdx; // 追いかけて表示を移す
+    saveState();
+    render();
+    showToast(t("timeline.movedToDay", { n: destDayIdx + 1 }));
   }
 
   // カードの完全コピー（idのみ新規発行）を直後に挿入する（move も複製可）
