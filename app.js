@@ -1869,6 +1869,9 @@
     el.settingsApiKeyInput = document.getElementById("settingsApiKeyInput");
     el.settingsSaveBtn = document.getElementById("settingsSaveBtn");
     el.settingsDeleteBtn = document.getElementById("settingsDeleteBtn");
+    el.settingsBackupBtn = document.getElementById("settingsBackupBtn");
+    el.settingsRestoreBtn = document.getElementById("settingsRestoreBtn");
+    el.settingsRestoreInput = document.getElementById("settingsRestoreInput");
 
     el.confirmModal = document.getElementById("confirmModal");
     el.confirmTitle = document.getElementById("confirmTitle");
@@ -3047,9 +3050,16 @@
       return it.id === id;
     });
     if (idx === -1) return;
+    var removed = list[idx]; // 「元に戻す」で同じ位置に復元するため控える
     list.splice(idx, 1);
     saveState();
     renderChecklistSection(kind);
+    showActionToast(t("toast.itemDeleted"), t("toast.undo"), function () {
+      var cur = checklistArray(kind);
+      cur.splice(Math.min(idx, cur.length), 0, removed);
+      saveState();
+      renderChecklistSection(kind);
+    });
   }
 
   // 準備モーダルのサイズを復元する。保存値が今の画面より大きい場合は画面に収まるよう抑える
@@ -3275,11 +3285,25 @@
   function deleteItem(id) {
     if (viewOnly) return;
     var day = trip.days[currentDayIndex];
-    day.items = day.items.filter(function (it) {
-      return it.id !== id;
+    var idx = day.items.findIndex(function (it) {
+      return it.id === id;
     });
+    if (idx === -1) return;
+    // 削除した項目と位置を控え、「元に戻す」で同じ場所に復元できるようにする。
+    // スマホでは🗑を誤タップしやすく、確認ダイアログを毎回出すより操作を邪魔しない
+    var removed = day.items[idx];
+    var dayIdx = currentDayIndex;
+    day.items.splice(idx, 1);
     saveState();
     render();
+    showActionToast(t("toast.itemDeleted"), t("toast.undo"), function () {
+      var d = trip.days[dayIdx];
+      if (!d) return; // 日ごと消えていた場合は何もしない
+      d.items.splice(Math.min(idx, d.items.length), 0, removed);
+      currentDayIndex = dayIdx;
+      saveState();
+      render();
+    });
   }
 
   // カードの完全コピー（idのみ新規発行）を直後に挿入する（move も複製可）
@@ -5036,6 +5060,11 @@
       if (entry.editId && authUser && firebaseReady && fbDb) {
         fbDb.collection(CLOUD_EDIT_TRIPS_COLLECTION).doc(entry.editId).delete().catch(function () {});
       }
+      // 公開層と公開URL（16）: 共有中のまま削除された場合は publicTrips 側も削除する。
+      // これが無いと、しおりを消しても共有URLを知っている人から旅程が見え続けてしまう
+      if (entry.publicId && authUser && firebaseReady && fbDb) {
+        fbDb.collection(CLOUD_PUBLIC_TRIPS_COLLECTION).doc(entry.publicId).delete().catch(function () {});
+      }
       var switched = false;
       if (currentTripId === id) {
         // アーカイブされていないしおりを優先して切り替え先にする
@@ -5875,6 +5904,104 @@
     return String(name || "trip").replace(/[\\/:*?"<>|]/g, "_").trim() || "trip";
   }
 
+  /* =========================================================
+   * 全しおりのバックアップ／復元
+   * 未ログイン利用者はブラウザのデータ消去で全て失う。ログインしていても
+   * Firestore 無料プランに自動バックアップは無いため、手動の保険を用意する。
+   * しおりデータのみを対象とし、APIキー・地名キャッシュは含めない
+   * ========================================================= */
+  function backupAllTrips() {
+    var payload = {
+      app: "tabi-no-shiori",
+      kind: "backup",
+      schema: 2,
+      exportedAt: new Date().toISOString(),
+      // v2ストアと同じ形（エントリのメタ情報 archived/publicId/editId 等も保つ）
+      store: {
+        currentId: currentTripId,
+        trips: tripsStore.map(function (e) {
+          return {
+            id: e.id,
+            data: e.data,
+            archived: !!e.archived,
+            cloudId: e.cloudId || null,
+            updatedAt: e.updatedAt || 0,
+            publicId: e.publicId || null,
+            editId: e.editId || null
+          };
+        })
+      }
+    };
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "tabi-shiori-backup-" + new Date().toISOString().slice(0, 10) + ".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  }
+
+  // 復元は「現在の全しおりを置き換える」破壊的操作なので必ず確認を挟む。
+  // 壊れたファイルの場合は何も変更せずエラーを出す（既存データを守る）
+  function restoreAllTripsFromFile(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (ev) {
+      var parsed = null;
+      try {
+        parsed = JSON.parse(String(ev.target.result || ""));
+      } catch (e) {
+        parsed = null;
+      }
+      var store = parsed && parsed.store;
+      if (!store || !Array.isArray(store.trips) || store.trips.length === 0) {
+        showToast(t("settings.restoreFailed"), "error");
+        return;
+      }
+      var entries = store.trips
+        .map(function (e) {
+          if (!e || !e.data || !Array.isArray(e.data.days)) return null;
+          return {
+            id: typeof e.id === "string" && e.id ? e.id : genId(),
+            // 他人が編集した可能性のあるファイルも受け取るため、必ず正規化を通す
+            data: normalizeTrip(e.data),
+            archived: !!e.archived,
+            cloudId: typeof e.cloudId === "string" ? e.cloudId : null,
+            // updatedAt はそのまま保つ。ログイン中はクラウド側が新しければ
+            // 既存の computeTripsMergePlan がクラウド優先で解決する
+            updatedAt: typeof e.updatedAt === "number" ? e.updatedAt : 0,
+            publicId: typeof e.publicId === "string" ? e.publicId : null,
+            editId: typeof e.editId === "string" ? e.editId : null
+          };
+        })
+        .filter(Boolean);
+      if (entries.length === 0) {
+        showToast(t("settings.restoreFailed"), "error");
+        return;
+      }
+      showConfirm(t("settings.restoreConfirmTitle"), t("settings.restoreConfirmBody"), function () {
+        tripsStore = entries;
+        var hasCurrent = entries.some(function (e) {
+          return e.id === store.currentId;
+        });
+        currentTripId = hasCurrent ? store.currentId : entries[0].id;
+        trip = getCurrentEntry().data;
+        currentDayIndex = 0;
+        persistLocalOnly();
+        render();
+        showToast(t("settings.restored", { n: entries.length }));
+      });
+    };
+    reader.onerror = function () {
+      showToast(t("settings.restoreFailed"), "error");
+    };
+    reader.readAsText(file);
+  }
+
   function downloadTripCsv() {
     var csv = el.textioArea.value;
     var BOM = "﻿";
@@ -6453,6 +6580,45 @@
     }, 3600);
   }
 
+  // アクション付きトースト（削除の「元に戻す」用）。既存の showToast はそのまま残す。
+  // onAction は1回だけ実行される（連打で二重復元しないこと）
+  function showActionToast(message, actionLabel, onAction) {
+    var toast = document.createElement("div");
+    toast.className = "toast toast-action";
+
+    var msgEl = document.createElement("span");
+    msgEl.textContent = message;
+    toast.appendChild(msgEl);
+
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "toast-action-btn";
+    btn.textContent = actionLabel;
+    var used = false;
+    var hideTimer = null;
+    function close() {
+      if (hideTimer) clearTimeout(hideTimer);
+      toast.classList.remove("toast-show");
+      setTimeout(function () {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+      }, 300);
+    }
+    btn.addEventListener("click", function () {
+      if (used) return; // 二重実行の防止
+      used = true;
+      close();
+      if (typeof onAction === "function") onAction();
+    });
+    toast.appendChild(btn);
+
+    el.toastContainer.appendChild(toast);
+    requestAnimationFrame(function () {
+      toast.classList.add("toast-show");
+    });
+    // 取り消しを選ぶ余裕があるよう、通常のトーストより長めに出す
+    hideTimer = setTimeout(close, 6000);
+  }
+
   function fallbackCopy(text) {
     var ta = document.createElement("textarea");
     ta.value = text;
@@ -6741,6 +6907,20 @@
       el.settingsApiKeyInput.value = "";
       showToast(t("settings.deleted"));
     });
+
+    if (el.settingsBackupBtn) {
+      el.settingsBackupBtn.addEventListener("click", backupAllTrips);
+    }
+    if (el.settingsRestoreBtn && el.settingsRestoreInput) {
+      el.settingsRestoreBtn.addEventListener("click", function () {
+        el.settingsRestoreInput.click();
+      });
+      el.settingsRestoreInput.addEventListener("change", function () {
+        var f = el.settingsRestoreInput.files && el.settingsRestoreInput.files[0];
+        restoreAllTripsFromFile(f);
+        el.settingsRestoreInput.value = ""; // 同じファイルを続けて選べるようにする
+      });
+    }
 
     el.shareBtn.addEventListener("click", openShareModal);
     el.shareCopyBtn.addEventListener("click", function () {

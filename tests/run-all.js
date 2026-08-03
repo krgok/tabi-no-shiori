@@ -19,6 +19,7 @@ const TEST_FILES = [
   "no-key-notice-test.js",
   "print-i18n-test.js",
   "test-prep-viewonly.js",
+  "test-safety.js",
   "privtest.js"
 ];
 

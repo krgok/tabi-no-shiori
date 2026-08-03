@@ -2114,6 +2114,31 @@ select {
   text-align: center;
 }
 
+/* 「元に戻す」ボタン付きトースト（削除のUndo用） */
+.toast-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 10px 8px 16px;
+}
+
+.toast-action-btn {
+  border: none;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 800;
+  padding: 6px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toast-action-btn:hover {
+  background: rgba(255, 255, 255, 0.34);
+}
+
 .toast.toast-error {
   background: #c94f4f;
 }
