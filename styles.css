@@ -1880,6 +1880,7 @@ select {
   color: #fff;
 }
 
+.trip-list-item-duplicate,
 .trip-list-item-archive {
   border: none;
   background: rgba(0, 0, 0, 0.06);
@@ -1895,6 +1896,7 @@ select {
   justify-content: center;
 }
 
+.trip-list-item-duplicate:hover,
 .trip-list-item-archive:hover {
   background: var(--pink);
   color: #fff;
@@ -2565,4 +2567,20 @@ body.collab-mode .checklist-list-priv-toggle {
     break-inside: avoid;
     color: #222;
   }
+}
+
+/* 出発カウントダウン（19）: タイトル下に控えめに出す */
+.trip-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.trip-countdown {
+  margin: 0 6px 2px 12px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--pink-dark);
+  letter-spacing: 0.02em;
 }
