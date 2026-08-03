@@ -151,7 +151,7 @@ function boot(opts) {
   const html = read("index.html")
     .replace(/<script src="vendor\/[^"]*"><\/script>/g, "")
     .replace(/<script src="i18n.js"><\/script>/, "")
-    .replace(/<script src="app.js"><\/script>/, "")
+    .replace(/<script src="js\/[^"]+"><\/script>/g, "")
     .replace(/<link[^>]*>/g, "");
 
   // スクリプト内の例外・console.error を漏れなく拾う（コンソールエラー検査のため）
@@ -213,7 +213,16 @@ function boot(opts) {
     }
   };
   runScript(read("i18n.js"), "i18n.js");
-  runScript(read("app.js"), "app.js");
+  runScript(read("js/00-core.js"), "js/00-core.js");
+  runScript(read("js/10-gmaps.js"), "js/10-gmaps.js");
+  runScript(read("js/20-data.js"), "js/20-data.js");
+  runScript(read("js/30-cloud.js"), "js/30-cloud.js");
+  runScript(read("js/40-ui.js"), "js/40-ui.js");
+  runScript(read("js/50-route.js"), "js/50-route.js");
+  runScript(read("js/60-share.js"), "js/60-share.js");
+  runScript(read("js/70-csv.js"), "js/70-csv.js");
+  runScript(read("js/80-print.js"), "js/80-print.js");
+  runScript(read("js/90-main.js"), "js/90-main.js");
 
   return { dom, win, fb, store, writeLog, errors, doc: win.document };
 }

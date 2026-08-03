@@ -14,14 +14,23 @@
  *   アプリのファイルを更新したらこの値を上げること
  */
 
-var CACHE_VERSION = "v1";
+var CACHE_VERSION = "v2";
 var CACHE_NAME = "tabi-shiori-" + CACHE_VERSION;
 
 // オフラインで起動するために必要な、同一オリジンのファイル一式
 var PRECACHE_URLS = [
   "./",
   "./index.html",
-  "./app.js",
+  "./js/00-core.js",
+  "./js/10-gmaps.js",
+  "./js/20-data.js",
+  "./js/30-cloud.js",
+  "./js/40-ui.js",
+  "./js/50-route.js",
+  "./js/60-share.js",
+  "./js/70-csv.js",
+  "./js/80-print.js",
+  "./js/90-main.js",
   "./i18n.js",
   "./styles.css",
   "./manifest.webmanifest",
