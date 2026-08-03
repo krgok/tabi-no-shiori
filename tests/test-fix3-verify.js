@@ -8,7 +8,9 @@
 const fs = require("fs");
 const { boot, tick, ok, section, results } = require("./harness");
 
-const REAL_CSV_PATH = "C:/Users/hiro/Claude/Projects/チェンマイ旅提案/タイ家族旅行2026年 (1)import用1648.csv";
+// 実ユーザーのCSVと同じ構造（6日・72項目・複数行メモ・Excel風カンマ埋め・第2テーブル）を持つ
+// 合成フィクスチャ。個人データをリポジトリに含めないため、実ファイルではなくこれを使う
+const REAL_CSV_PATH = require("path").join(__dirname, "fixtures", "import-sample.csv");
 
 function sightItem(id, name, extra) {
   return Object.assign(
@@ -222,7 +224,7 @@ async function waitUntil(cond, timeoutMs, stepMs) {
   }
 
   /* ================================================================ */
-  section("Part 4. 実ファイル: 旧CSV（タイトル行なし）とタイトル行つき");
+  section("Part 4. 実データ相当フィクスチャ: 旧CSV（タイトル行なし）とタイトル行つき");
   {
     const env = boot({});
     await tick();
