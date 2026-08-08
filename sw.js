@@ -14,7 +14,7 @@
  *   アプリのファイルを更新したらこの値を上げること
  */
 
-var CACHE_VERSION = "v2";
+var CACHE_VERSION = "v3";
 var CACHE_NAME = "tabi-shiori-" + CACHE_VERSION;
 
 // オフラインで起動するために必要な、同一オリジンのファイル一式
