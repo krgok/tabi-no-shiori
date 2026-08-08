@@ -378,6 +378,16 @@
   </div>
 </div>
 
+<!-- 別日コピー選択モーダル -->
+<div id="copyModal" class="modal-overlay hidden">
+  <div class="modal modal-confirm">
+    <button type="button" id="copyModalCloseBtn" class="modal-close" data-i18n-aria="modal.close" data-close="copyModal" aria-label="閉じる">✕</button>
+    <h2 id="copyModalTitle" class="confirm-title" data-i18n="timeline.copyModalTitle">コピー先を選択</h2>
+    <div id="copyModalBody" class="copy-modal-body" style="margin-top: 14px; display: flex; flex-direction: column; gap: 8px;"></div>
+  </div>
+</div>
+
+
 <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
 <script src="i18n.js"></script>

@@ -884,7 +884,7 @@ function runRouteCalculation(dayIndex) {
   // saveState() は従来どおり計算完了時に1回だけ呼ぶ
   var removedAutoMove = false;
   day.items = day.items.filter(function (it) {
-    if (it.cat === "move" && it.auto) {
+    if (it.cat === "move" && it.auto && !it.fixedStart) {
       removedAutoMove = true;
       return false;
     }

@@ -197,6 +197,10 @@ function cacheDom() {
   el.confirmCancelBtn = document.getElementById("confirmCancelBtn");
   el.confirmOkBtn = document.getElementById("confirmOkBtn");
 
+  el.copyModal = document.getElementById("copyModal");
+  el.copyModalTitle = document.getElementById("copyModalTitle");
+  el.copyModalBody = document.getElementById("copyModalBody");
+
   el.toastContainer = document.getElementById("toastContainer");
 
   el.mapSection = document.getElementById("mapSection");
@@ -665,6 +669,9 @@ function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
       fixedStartEditingId = null;
       if (commit) {
         item.fixedStart = normalizeFixedStart(fixedStartInput.value);
+        if (item.cat === "move" && item.auto && item.fixedStart) {
+          item.auto = false;
+        }
         saveState();
       }
       render();
@@ -1708,19 +1715,89 @@ function nudgeItem(id, dir) {
   showToast(t("timeline.movedToDay", { n: destDayIdx + 1 }));
 }
 
-// カードの完全コピー（idのみ新規発行）を直後に挿入する（move も複製可）
-function duplicateItem(id) {
+// 指定した日（targetDayIndex）にアイテムの完全コピーを挿入する
+function copyItemToDay(id, targetDayIndex) {
   if (viewOnly) return;
-  var day = trip.days[currentDayIndex];
-  var idx = day.items.findIndex(function (it) {
-    return it.id === id;
-  });
-  if (idx === -1) return;
-  var copy = JSON.parse(JSON.stringify(day.items[idx]));
+  var currentDay = trip.days[currentDayIndex];
+  var sourceItemIdx = -1;
+  var sourceItem = null;
+
+  if (currentDay && currentDay.items) {
+    sourceItemIdx = currentDay.items.findIndex(function (it) {
+      return it.id === id;
+    });
+    if (sourceItemIdx !== -1) {
+      sourceItem = currentDay.items[sourceItemIdx];
+    }
+  }
+  if (!sourceItem) {
+    for (var d = 0; d < trip.days.length; d++) {
+      var idx = trip.days[d].items.findIndex(function (it) {
+        return it.id === id;
+      });
+      if (idx !== -1) {
+        sourceItem = trip.days[d].items[idx];
+        if (d === currentDayIndex) sourceItemIdx = idx;
+        break;
+      }
+    }
+  }
+  if (!sourceItem) return;
+  if (targetDayIndex < 0 || targetDayIndex >= trip.days.length) return;
+
+  var copy = JSON.parse(JSON.stringify(sourceItem));
   copy.id = genId();
-  day.items.splice(idx + 1, 0, copy);
+
+  var targetDay = trip.days[targetDayIndex];
+  if (targetDayIndex === currentDayIndex && sourceItemIdx !== -1) {
+    targetDay.items.splice(sourceItemIdx + 1, 0, copy);
+  } else {
+    targetDay.items.push(copy);
+  }
+
   saveState();
   render();
+  showToast(t("timeline.copiedToDay", { n: targetDayIndex + 1 }));
+}
+
+function openCopyModal(id) {
+  var modal = el.copyModal || document.getElementById("copyModal");
+  if (!modal) return;
+  var body = el.copyModalBody || document.getElementById("copyModalBody");
+  if (!body) return;
+  body.innerHTML = "";
+
+  trip.days.forEach(function (d, i) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-outline";
+    btn.style.width = "100%";
+    btn.style.textAlign = "left";
+    btn.style.justifyContent = "flex-start";
+    var dateLabel = d.date ? " (" + d.date + ")" : "";
+    if (i === currentDayIndex) {
+      btn.textContent = "📋 " + t("timeline.copyCurrentDay", { n: i + 1 }) + dateLabel;
+    } else {
+      btn.textContent = "➡️ " + t("timeline.copyTargetDay", { n: i + 1 }) + dateLabel;
+    }
+    btn.addEventListener("click", function () {
+      closeModal(modal);
+      copyItemToDay(id, i);
+    });
+    body.appendChild(btn);
+  });
+
+  openModal(modal);
+}
+
+// カードのコピー。複数日の場合はモーダルを開き、1日の場合は同日内に複製する
+function duplicateItem(id) {
+  if (viewOnly) return;
+  if (trip.days.length <= 1) {
+    copyItemToDay(id, currentDayIndex);
+    return;
+  }
+  openCopyModal(id);
 }
 
 function addItemFromForm() {
