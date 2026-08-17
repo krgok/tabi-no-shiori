@@ -930,6 +930,7 @@ function runRouteCalculation(dayIndex) {
         actualStart: null,
         actualLat: null,
         actualLon: null,
+        actualAt: null,
         lat: null,
         lon: null,
         mode: mode,

@@ -410,7 +410,12 @@ window.__tabiShioriCollabInternals = {
   // 自己エコー無視（writerIdの一致判定）をテストから正確に再現するために公開する
   getSessionWriterId: function () {
     return SESSION_WRITER_ID;
-  }
+  },
+  // 実績の端末間マージ（23追記）: computeTripsMergePlan/applyCloudMergePlan は tripsStore 等の
+  // グローバル状態を扱うため、Firestore の実ログインフローを介さずテストから直接呼べるように公開する
+  mergeTripActuals: mergeTripActuals,
+  computeTripsMergePlan: computeTripsMergePlan,
+  applyCloudMergePlan: applyCloudMergePlan
 };
 
 /* =========================================================

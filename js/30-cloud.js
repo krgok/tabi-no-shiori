@@ -485,13 +485,25 @@ function computeTripsMergePlan(localTrips, cloudDocs) {
 // マージ計画（computeTripsMergePlan）を実際の tripsStore に適用し、ローカル更新・追加を反映してから
 // アップロード対象をクラウドへ書き込む。最後にマージ内容をトーストで通知する
 function applyCloudMergePlan(plan) {
+  // 実績の端末間マージ（23追記）: クラウド版をローカルに採用（updatedAtが新しいのでクラウド側を丸ごと
+  // 取り込む）した際、そのまま上書きすると「採用前のローカル版にしか無かった実績」が消えてしまう。
+  // mergeTripActuals で採用前のローカル版の実績（項目id単位）をクラウド版に拾い上げてから使う。
+  // 拾い上げた結果がクラウド版と異なる（＝ローカルにしかなかった実績があった）場合は、
+  // このしおりをアップロード対象にも加え、クラウドへ反映する（次に他端末が開いたとき両方揃うように）
+  var actualsReconciledEntries = [];
   plan.localUpdates.forEach(function (u) {
     var parsed = safeParseTripJSON(u.cloudDoc.data);
     if (parsed) {
-      u.entry.data = normalizeTrip(parsed);
+      var cloudTrip = normalizeTrip(parsed);
+      var localTripBeforeOverwrite = u.entry.data;
+      var mergedTrip = mergeTripActuals(cloudTrip, localTripBeforeOverwrite);
+      u.entry.data = mergedTrip;
       // 公開URL閲覧（16）: viewOnly 中は trip が他人の公開コピーを指しているため上書きしない
       // 編集できる共有リンク（18）: collabMode 中も同様に trip は共同編集中の他人のしおりを指すため上書きしない
       if (!viewOnly && !collabMode && u.entry.id === currentTripId) trip = u.entry.data;
+      if (JSON.stringify(mergedTrip) !== JSON.stringify(cloudTrip)) {
+        actualsReconciledEntries.push(u.entry);
+      }
     }
     u.entry.archived = !!u.cloudDoc.archived;
     u.entry.updatedAt = u.cloudDoc.updatedAt || 0;
@@ -519,6 +531,10 @@ function applyCloudMergePlan(plan) {
   syncEditListenerForCurrentTrip();
 
   plan.uploads.forEach(function (entry) {
+    cloudUpsertEntry(entry);
+  });
+  // 実績の端末間マージ（23追記）: 拾い上げた実績をクラウドへも反映する（uploads とは重複しない集合のため単純に追加）
+  actualsReconciledEntries.forEach(function (entry) {
     cloudUpsertEntry(entry);
   });
 
