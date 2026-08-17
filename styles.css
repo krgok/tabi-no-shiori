@@ -964,6 +964,82 @@ select {
   white-space: nowrap;
 }
 
+/* 実績記録（フェーズ1）: 「実績 HH:MM (+N分)」の表示行。クリックで手動修正できる */
+.item-actual-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.item-actual-display {
+  font: inherit;
+  font-size: 0.66rem;
+  color: var(--ink-soft);
+  background: none;
+  border: none;
+  padding: 1px 3px;
+  margin: -1px -3px;
+  border-radius: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.item-actual-display:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* 遅れ（+N分）: 目立つ警告色。早着（-N分）: 控えめな落ち着いた色 */
+.item-actual-display.is-late {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.item-actual-display.is-early {
+  color: var(--color-sight);
+}
+
+.item-actual-clear-btn {
+  font-size: 0.62rem;
+  line-height: 1;
+  color: var(--ink-soft);
+  background: none;
+  border: none;
+  padding: 2px;
+  margin-left: 1px;
+  border-radius: 999px;
+  cursor: pointer;
+  vertical-align: middle;
+  position: relative;
+}
+
+.item-actual-clear-btn::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 30px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+}
+
+.item-actual-clear-btn:hover {
+  color: var(--warn);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.item-actual-input {
+  width: 100%;
+  max-width: 68px;
+  font-size: 0.66rem;
+  font-family: inherit;
+  color: var(--ink);
+  background: #fff;
+  border: 1.5px solid var(--color-sight);
+  border-radius: var(--radius-sm);
+  padding: 1px 2px;
+  outline: none;
+}
+
 .item-gmap-route-link {
   display: inline-flex;
   align-items: center;
@@ -1123,6 +1199,27 @@ select {
   opacity: 1;
   background: rgba(0, 0, 0, 0.06);
   color: var(--ink);
+}
+
+/* 実績記録（フェーズ1）: ✓ボタン。到着時刻(actualStart)を記録する。他のactionColボタンと同じ見た目 */
+.item-actual-record-btn {
+  flex: none;
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  opacity: 0.6;
+}
+
+.item-actual-record-btn:hover {
+  opacity: 1;
+  background: var(--color-sight-bg);
+  color: var(--color-sight);
 }
 
 /* 非公開マーク（14）: 項目まるごとの 🔓/🔒 トグル。複製・削除ボタンと並べて配置する */
@@ -2389,12 +2486,13 @@ body.view-only-mode .day-tab-close,
 body.view-only-mode #addDayBtn,
 /* 日単位の🔒トグル（14拡張） */
 body.view-only-mode .day-priv-toggle,
-/* カードの操作ボタン（ドラッグ・複製・削除・🔒トグル） */
+/* カードの操作ボタン（ドラッグ・複製・削除・🔒トグル・実績記録） */
 body.view-only-mode .drag-handle,
 body.view-only-mode .item-duplicate,
 body.view-only-mode .item-delete,
 body.view-only-mode .item-priv-toggle,
 body.view-only-mode .item-note-priv-toggle,
+body.view-only-mode .item-actual-record-btn,
 /* チェックリスト行の操作ボタン（🔒トグル・削除）・リスト全体単位の🔒トグル（14拡張） */
 body.view-only-mode .checklist-priv-toggle,
 body.view-only-mode .checklist-list-priv-toggle,
@@ -2418,6 +2516,12 @@ body.view-only-mode .checklist-text-input {
 /* 開始時刻の手動固定（17）: 閲覧モードではJS側で<span>（クリックハンドラ無し）として描画されるが、
    見た目からも「押せる」ヒントを消しておく */
 body.view-only-mode .item-start-time-btn {
+  cursor: default;
+}
+
+/* 実績記録（フェーズ1）: 閲覧モードでは <span>（クリックハンドラ無し）として描画されるが、
+   見た目からも「押せる」ヒントを消しておく（fixedStartと同じ扱い） */
+body.view-only-mode .item-actual-display {
   cursor: default;
 }
 

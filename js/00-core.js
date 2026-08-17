@@ -103,6 +103,9 @@ var tripsArchivedOpen = false;
 // trip状態（保存対象）ではなくUI一時状態としてここに持つ。item.id はグローバルに一意（genId()）なため、
 // 日/しおりの切り替えでリセットしなくても別項目のカードに誤って表示されることはない
 var fixedStartEditingId = null;
+// 実績記録（フェーズ1）: fixedStartEditingId と同じ理由・同じ運用（タイムラインで
+// <input type="time"> をインライン編集中の項目id。render() をまたいで保持する必要があるためUI一時状態として持つ）
+var actualStartEditingId = null;
 var dragState = null;
 // 持ち物・やることリストの並べ替え（10 拡張）: タイムラインのドラッグ（dragState）とは
 // 別のDOMサブツリー・別の対象配列（trip.packing/trip.todos）を扱うため、状態も分けて持つ

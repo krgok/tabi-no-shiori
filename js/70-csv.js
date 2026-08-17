@@ -23,7 +23,11 @@ var CSV_COLUMNS = ["day", "date", "start", "category", "mode", "name", "minutes"
 // 非公開マーク（14拡張）: dayPrivate（day列と同様に行ごと。同一dayの最初の行の値を採用）も任意列として追加する
 // 開始時刻の手動固定（17）: fixedStart（"HH:MM" または空。move含む全カテゴリー共通）も任意列として追加する。
 // 旧CSV（列が無い）では null 扱いになり後方互換を保つ
-var CSV_OPTIONAL_COLUMNS = ["tz", "arriveTz", "private", "notePrivate", "dayPrivate", "fixedStart"];
+// 実績記録（フェーズ1）: actualStart/actualLat/actualLon を末尾の任意列として追加する。
+// 既存列の並びには一切手を加えず、末尾に追加するだけに留める（別アプリ「旅行記録アプリ」が
+// このCSVを読み込む際、未知の列は無視される設計のため、これで互換性が保たれる）。
+// 旧CSV（列が無い）では null 扱いになり後方互換を保つ
+var CSV_OPTIONAL_COLUMNS = ["tz", "arriveTz", "private", "notePrivate", "dayPrivate", "fixedStart", "actualStart", "actualLat", "actualLon"];
 // 持ち物リスト・やることリスト（10）: 行程CSVの後に空行を1行挟んだ第2テーブルのヘッダー（必須列）
 var CHECKLIST_CSV_COLUMNS = ["list", "text", "done"];
 // 非公開マークと公開用データ（14）: 第2テーブルの任意列（旧CSVには無いため false 扱いで後方互換）。
@@ -166,7 +170,11 @@ function exportTripCsv() {
         // 非公開マーク（14拡張）: dayPrivate は日単位のフラグを行ごとに繰り返し出力する（tz と同様）
         day.priv ? "1" : "0",
         // 開始時刻の手動固定（17）: 未固定は空文字
-        item.fixedStart || ""
+        item.fixedStart || "",
+        // 実績記録（フェーズ1）: 既存列の末尾に追加。未記録は空文字
+        item.actualStart || "",
+        item.actualLat != null ? String(item.actualLat) : "",
+        item.actualLon != null ? String(item.actualLon) : ""
       ]);
     });
   });
@@ -325,6 +333,17 @@ function csvBoolField(fields, colIndex, key) {
   return v === "1" || v === "true";
 }
 
+// 実績記録（フェーズ1）: actualLat/actualLon（浮動小数）の任意列を number|null に変換する。
+// 列が無い（旧CSV）・値が数値として解釈できない場合は null にする（csvBoolField と同じ後方互換方針）
+function csvNumberField(fields, colIndex, key) {
+  var idx = colIndex[key];
+  if (idx == null) return null;
+  var raw = (fields[idx] || "").trim();
+  if (raw === "") return null;
+  var n = parseFloat(raw);
+  return isFinite(n) ? n : null;
+}
+
 // 1行分のCSVレコード(フィールド配列)を item に変換する。パースできない場合は null を返す
 function parseCsvItemRow(fields, colIndex) {
   var catWord = fields[colIndex.category];
@@ -355,6 +374,11 @@ function parseCsvItemRow(fields, colIndex) {
     // undefined になり fields[undefined] は undefined になるので null 扱い（後方互換）。
     // 値がある場合も "HH:MM" 形式以外は normalizeFixedStart が防御的に null にする
     fixedStart: normalizeFixedStart(colIndex.fixedStart != null ? fields[colIndex.fixedStart] : null),
+    // 実績記録（フェーズ1）: actualStart/actualLat/actualLon は任意列。旧CSV（列が無い）・
+    // Excelのカンマ埋めで行が短くなっている場合のいずれも null 扱いになる（後方互換）
+    actualStart: normalizeFixedStart(colIndex.actualStart != null ? fields[colIndex.actualStart] : null),
+    actualLat: csvNumberField(fields, colIndex, "actualLat"),
+    actualLon: csvNumberField(fields, colIndex, "actualLon"),
     lat: null,
     lon: null,
     coordSrc: null
