@@ -47,6 +47,40 @@ function clickLoadCsvAndConfirm(env) {
   env.doc.getElementById("confirmOkBtn").click();
 }
 
+// 実績の端末間マージ（23追記）: mergeTripActuals / applyCloudMergePlan 検証用の軽量フィクスチャ生成
+function actualsItem(id, name, extra) {
+  return Object.assign(
+    {
+      id,
+      cat: "sight",
+      name,
+      loc: "",
+      dur: 30,
+      note: "",
+      lat: null,
+      lon: null,
+      coordSrc: null,
+      priv: false,
+      notePriv: false,
+      fixedStart: null,
+      actualStart: null,
+      actualLat: null,
+      actualLon: null,
+      actualAt: null,
+      gmap: "",
+      gmapAuto: false,
+      names: {}
+    },
+    extra || {}
+  );
+}
+function actualsDay(id, date, items) {
+  return { id, date, startTime: "09:00", tz: "", priv: false, dateManual: false, items };
+}
+function actualsTrip(days) {
+  return { v: 1, title: "旅", titles: { ja: "旅" }, lang: "ja", days, packing: [], todos: [], packingPriv: false, todosPriv: false };
+}
+
 (async () => {
   /* ================================================================ */
   section("1. normalizeTrip: actualStart/actualLat/actualLonの防御的正規化");
@@ -63,10 +97,11 @@ function clickLoadCsvAndConfirm(env) {
           date: "",
           startTime: "09:00",
           items: [
-            { id: "i1", cat: "sight", name: "A", actualStart: "9:05", actualLat: 35.1, actualLon: 139.2 },
-            { id: "i2", cat: "sight", name: "B", actualStart: "25:99", actualLat: 1, actualLon: 2 },
-            { id: "i3", cat: "sight", name: "C", actualStart: 12345, actualLat: "abc", actualLon: NaN },
-            { id: "i4", cat: "sight", name: "D", actualLat: 35.1 }
+            { id: "i1", cat: "sight", name: "A", actualStart: "9:05", actualLat: 35.1, actualLon: 139.2, actualAt: 12345 },
+            { id: "i2", cat: "sight", name: "B", actualStart: "25:99", actualLat: 1, actualLon: 2, actualAt: "12345" },
+            { id: "i3", cat: "sight", name: "C", actualStart: 12345, actualLat: "abc", actualLon: NaN, actualAt: NaN },
+            { id: "i4", cat: "sight", name: "D", actualLat: 35.1 },
+            { id: "i5", cat: "sight", name: "E", actualAt: Infinity }
           ]
         }
       ]
@@ -75,9 +110,14 @@ function clickLoadCsvAndConfirm(env) {
     const items = t.days[0].items;
     ok(items[0].actualStart === "09:05", "1桁の時(H:MM)表記はゼロ埋め正規化される", items[0].actualStart);
     ok(items[0].actualLat === 35.1 && items[0].actualLon === 139.2, "有効な座標はそのまま保持される", [items[0].actualLat, items[0].actualLon]);
+    ok(items[0].actualAt === 12345, "有効なactualAt(number)はそのまま保持される", items[0].actualAt);
     ok(items[1].actualStart === null, "時=25/分=99など範囲外の時刻はnullになる", items[1].actualStart);
+    ok(items[1].actualAt === null, "actualAtが文字列型は防御的にnullになる", items[1].actualAt);
     ok(items[2].actualStart === null && items[2].actualLat === null && items[2].actualLon === null, "型が違う値(number/文字列/NaN)は防御的にnullになる", items[2]);
+    ok(items[2].actualAt === null, "actualAtがNaNは防御的にnullになる", items[2].actualAt);
     ok(items[3].actualLat === null && items[3].actualLon === null, "片方だけしか無い座標は両方nullに落ちる", items[3]);
+    ok(items[3].actualAt === null, "actualAt未指定は既定でnullになる", items[3].actualAt);
+    ok(items[4].actualAt === null, "actualAtがInfinity(有限でない)は防御的にnullになる", items[4].actualAt);
   }
 
   /* ================================================================ */
@@ -94,7 +134,7 @@ function clickLoadCsvAndConfirm(env) {
         {
           date: "",
           startTime: "09:00",
-          items: [{ id: "i1", cat: "sight", name: "A", actualStart: "10:00", actualLat: 35.1, actualLon: 139.2 }]
+          items: [{ id: "i1", cat: "sight", name: "A", actualStart: "10:00", actualLat: 35.1, actualLon: 139.2, actualAt: 77777 }]
         }
       ]
     });
@@ -103,6 +143,7 @@ function clickLoadCsvAndConfirm(env) {
     ok(it.actualLat === null, "actualLatは公開コピーから削除される(null化)", it.actualLat);
     ok(it.actualLon === null, "actualLonは公開コピーから削除される(null化)", it.actualLon);
     ok(it.actualStart === "10:00", "actualStart(時刻のみ)は公開コピーにも残る", it.actualStart);
+    ok(it.actualAt === 77777, "actualAt(実績の最終更新時刻)も公開コピーに残る(共同編集マージの判断材料のため)", it.actualAt);
   }
 
   /* ================================================================ */
@@ -336,7 +377,7 @@ function clickLoadCsvAndConfirm(env) {
   }
 
   /* ================================================================ */
-  section("9. 共同編集マージ: actualStartは伝わり、actualLat/actualLonはオーナー側が保持される");
+  section("9. 共同編集マージ: actualAtの新しい方が勝ち、座標は共有リンクへ絶対に流れない");
   {
     const internalsEnv = boot({});
     await tick();
@@ -363,6 +404,7 @@ function clickLoadCsvAndConfirm(env) {
           actualStart: null,
           actualLat: null,
           actualLon: null,
+          actualAt: null,
           gmap: "",
           gmapAuto: false,
           names: {}
@@ -377,22 +419,38 @@ function clickLoadCsvAndConfirm(env) {
       return { v: 1, title: "旅", titles: { ja: "旅" }, lang: "ja", days, packing: [], todos: [], packingPriv: false, todosPriv: false };
     }
 
-    // オーナーは既に実績（到着時刻+GPS）を記録済み
+    // 9a: 共同編集者側のactualAtが新しい場合は伝わる（実際にUIで✓を押せばactualAtも更新される想定）
+    // オーナーは既に実績（到着時刻+GPS）を記録済み(actualAt=1000)
     const ownerTrip = normalize(
-      baseTrip([day("d1", [sightItem("a", "浅草寺", { actualStart: "10:05", actualLat: 35.71, actualLon: 139.79 })])])
+      baseTrip([day("d1", [sightItem("a", "浅草寺", { actualStart: "10:05", actualLat: 35.71, actualLon: 139.79, actualAt: 1000 })])])
     );
 
     const publicView = sanitize(ownerTrip);
     ok(publicView.days[0].items[0].actualLat === null && publicView.days[0].items[0].actualLon === null, "前提: 公開ビュー(共同編集者に配信されるコピー)にはGPS座標が含まれない");
     ok(publicView.days[0].items[0].actualStart === "10:05", "前提: 公開ビューには実績時刻は含まれる");
 
-    // 共同編集者は自分のGPSを持たない(null)まま、実績時刻だけ書き換えた
+    // 共同編集者は自分のGPSを持たない(null)まま、オーナーより後の時刻(actualAt=2000)で実績時刻を書き換えた
     const received = normalize(publicView);
     received.days[0].items[0].actualStart = "10:20";
+    received.days[0].items[0].actualAt = 2000;
     const merged = merge(ownerTrip, received);
-    ok(merged.days[0].items[0].actualStart === "10:20", "共同編集者が書き換えたactualStartが伝わる");
+    ok(merged.days[0].items[0].actualStart === "10:20", "共同編集者側のactualAtが新しければ書き換えたactualStartが伝わる");
+    ok(merged.days[0].items[0].actualLat === null && merged.days[0].items[0].actualLon === null, "共同編集者側が勝った場合、座標は(オーナー側の古い記録も含め)nullになる。座標が共有リンク経由で紛れ込む余地は無い");
+
+    // 9b: 家族の古いコピー受信でオーナーの新しい実績時刻が巻き戻らない（本バグ修正の主眼）。
+    // オーナーがさらに後で(actualAt=3000)実績を上書きした後、家族が9a時点の古いコピー(actualAt=2000)を
+    // 別の編集(例: メモ変更)と一緒に送り返してきたケースを想定する
+    const ownerTrip2 = normalize(
+      baseTrip([day("d1", [sightItem("a", "浅草寺", { actualStart: "10:35", actualLat: 35.72, actualLon: 139.8, actualAt: 3000 })])])
+    );
+    const staleReceived = normalize(publicView); // publicView(actualAt=1000相当)よりは新しいが、ownerTrip2(3000)よりは古いデータ
+    staleReceived.days[0].items[0].actualStart = "10:20";
+    staleReceived.days[0].items[0].actualAt = 2000;
+    const merged2 = merge(ownerTrip2, staleReceived);
+    ok(merged2.days[0].items[0].actualStart === "10:35", "オーナー側のactualAtの方が新しければ、家族の古いコピーで実績時刻が巻き戻らない", merged2.days[0].items[0].actualStart);
+    ok(merged2.days[0].items[0].actualAt === 3000, "actualAtもオーナー側の新しい値のまま", merged2.days[0].items[0].actualAt);
     ok(
-      merged.days[0].items[0].actualLat === 35.71 && merged.days[0].items[0].actualLon === 139.79,
+      merged2.days[0].items[0].actualLat === 35.72 && merged2.days[0].items[0].actualLon === 139.8,
       "オーナーが記録済みのGPS座標は共同編集マージ後も消えずに保持される(受信データのnullで上書きされない)"
     );
   }
@@ -427,6 +485,163 @@ function clickLoadCsvAndConfirm(env) {
     card1After.querySelector(".item-duplicate").click();
     await tick();
     ok(env.doc.querySelectorAll("#timeline .item-card").length === beforeCount + 1, "複製ボタンも引き続き動作する");
+  }
+
+  /* ================================================================ */
+  section("12. mergeTripActuals: 端末Aが項目1、端末Bが項目2に実績→合成後に両方残る");
+  {
+    const internalsEnv = boot({});
+    await tick();
+    const T = internalsEnv.win.__tabiShioriCollabInternals;
+    const mergeTripActuals = T.mergeTripActuals;
+
+    // adopted(採用する側=updatedAtが新しい方): 項目1(i1)にだけ端末Aの実績がある
+    const adopted = T.normalizeTrip(
+      actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "スポット1", { actualStart: "10:00", actualAt: 1000 }), actualsItem("i2", "スポット2")])])
+    );
+    // other(もう一方の端末): 項目2(i2)にだけ端末Bの実績がある
+    const other = T.normalizeTrip(
+      actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "スポット1"), actualsItem("i2", "スポット2", { actualStart: "11:30", actualAt: 500 })])])
+    );
+
+    const merged = mergeTripActuals(adopted, other);
+    const items = merged.days[0].items;
+    ok(items.find((i) => i.id === "i1").actualStart === "10:00", "採用した側(端末A)の項目1の実績が残る", items.find((i) => i.id === "i1"));
+    ok(items.find((i) => i.id === "i2").actualStart === "11:30", "もう一方(端末B)にしか無かった項目2の実績も拾い上げられて残る", items.find((i) => i.id === "i2"));
+  }
+
+  /* ================================================================ */
+  section("13. mergeTripActuals: 新しいactualAtが古い方に勝つ／×クリアが伝わる");
+  {
+    const internalsEnv = boot({});
+    await tick();
+    const T = internalsEnv.win.__tabiShioriCollabInternals;
+    const mergeTripActuals = T.mergeTripActuals;
+
+    // 13a: 同じ項目に両端末が記録。otherの方がactualAtが新しい→otherの値が勝つ
+    const adoptedOld = T.normalizeTrip(actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "A", { actualStart: "09:00", actualAt: 1000 })])]));
+    const otherNew = T.normalizeTrip(actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "A", { actualStart: "09:30", actualAt: 2000 })])]));
+    const merged1 = mergeTripActuals(adoptedOld, otherNew);
+    ok(merged1.days[0].items[0].actualStart === "09:30", "actualAtが新しい方(other)の実績時刻が勝つ", merged1.days[0].items[0].actualStart);
+    ok(merged1.days[0].items[0].actualAt === 2000, "actualAtも新しい方の値になる", merged1.days[0].items[0].actualAt);
+
+    // 13b: ×クリア(actualStart=null)でもactualAtが新しければ伝わる（消去も実績の変更として扱われる）
+    const adoptedHasValue = T.normalizeTrip(actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "A", { actualStart: "09:00", actualLat: 35.0, actualLon: 139.0, actualAt: 1000 })])]));
+    const otherCleared = T.normalizeTrip(actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "A", { actualStart: null, actualAt: 3000 })])]));
+    const merged2 = mergeTripActuals(adoptedHasValue, otherCleared);
+    ok(merged2.days[0].items[0].actualStart === null, "新しい方が×クリア(actualStart=null)なら、クリアの方が伝わる", merged2.days[0].items[0]);
+    ok(merged2.days[0].items[0].actualLat === null && merged2.days[0].items[0].actualLon === null, "クリアが勝った場合は座標も一緒にnullになる", merged2.days[0].items[0]);
+    ok(merged2.days[0].items[0].actualAt === 3000, "actualAtもクリアした側の新しい値になる", merged2.days[0].items[0].actualAt);
+  }
+
+  /* ================================================================ */
+  section("14. mergeTripActuals: actualAt同値(両方null含む)ではnon-null優先");
+  {
+    const internalsEnv = boot({});
+    await tick();
+    const T = internalsEnv.win.__tabiShioriCollabInternals;
+    const mergeTripActuals = T.mergeTripActuals;
+
+    // 14a: 両方actualAt未設定(null=0扱い)で、otherだけ実績値を持つ→otherが優先される
+    const adoptedEmpty = T.normalizeTrip(actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "A")])]));
+    const otherHasStart = T.normalizeTrip(actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "A", { actualStart: "12:00" })])]));
+    const merged1 = mergeTripActuals(adoptedEmpty, otherHasStart);
+    ok(merged1.days[0].items[0].actualStart === "12:00", "actualAt同値(共にnull)ならnon-nullの実績値を持つ側が優先される", merged1.days[0].items[0].actualStart);
+
+    // 14b: 逆に adopted 側だけ実績値を持つ場合は adopted の値が残る
+    const adoptedHasStart = T.normalizeTrip(actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "A", { actualStart: "08:00" })])]));
+    const otherEmpty = T.normalizeTrip(actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "A")])]));
+    const merged2 = mergeTripActuals(adoptedHasStart, otherEmpty);
+    ok(merged2.days[0].items[0].actualStart === "08:00", "actualAt同値でadopted側だけがnon-nullならadopted側が残る", merged2.days[0].items[0].actualStart);
+
+    // 14c: 両方null(未記録)のままなら、結果もnullのまま
+    const bothEmptyA = T.normalizeTrip(actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "A")])]));
+    const bothEmptyB = T.normalizeTrip(actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("i1", "A")])]));
+    const merged3 = mergeTripActuals(bothEmptyA, bothEmptyB);
+    ok(merged3.days[0].items[0].actualStart === null, "両方とも未記録ならマージ後もnullのまま", merged3.days[0].items[0].actualStart);
+  }
+
+  /* ================================================================ */
+  section("15. mergeTripActuals: 項目が別の日へ移動していてもidで照合して実績が合流する");
+  {
+    const internalsEnv = boot({});
+    await tick();
+    const T = internalsEnv.win.__tabiShioriCollabInternals;
+    const mergeTripActuals = T.mergeTripActuals;
+
+    // adopted側では項目iXはDay2(d2)にある。other側では同じid iXがDay1(d1)にある(＝別端末で日をまたいで移動した)
+    const adopted = T.normalizeTrip(
+      actualsTrip([actualsDay("d1", "2026-08-01", []), actualsDay("d2", "2026-08-02", [actualsItem("iX", "移動した項目")])])
+    );
+    const other = T.normalizeTrip(
+      actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("iX", "移動した項目", { actualStart: "13:15", actualAt: 9999 })]), actualsDay("d2", "2026-08-02", [])])
+    );
+
+    const merged = mergeTripActuals(adopted, other);
+    ok(merged.days[0].items.length === 0, "adopted側の日構成(項目はDay2にある)がそのまま使われる");
+    const movedItem = merged.days[1].items.find((i) => i.id === "iX");
+    ok(!!movedItem, "移動先の日(Day2)に項目が存在する");
+    ok(movedItem.actualStart === "13:15", "日をまたいでいてもidで照合され、other側の実績が合流する", movedItem && movedItem.actualStart);
+  }
+
+  /* ================================================================ */
+  section("16. applyCloudMergePlan経由: クラウド採用時にローカルの実績が拾われ、アップロード対象に入る");
+  {
+    const STORE_KEY = STORAGE_KEY;
+    const localTrip = actualsTrip([
+      actualsDay("d1", "2026-08-01", [
+        actualsItem("a1", "スポットA", { actualStart: "09:10", actualLat: 35.0, actualLon: 139.0, actualAt: 5000 }),
+        actualsItem("a2", "スポットB")
+      ])
+    ]);
+    const storage = {
+      [STORE_KEY]: JSON.stringify({
+        currentId: "loc1",
+        trips: [{ id: "loc1", data: localTrip, archived: false, cloudId: "C1", updatedAt: 1000, publicId: null, editId: null }]
+      })
+    };
+    const env = boot({ localStorage: storage });
+    await tick();
+
+    const T = env.win.__tabiShioriCollabInternals;
+    // Firestore呼び出し無しでcloudUpsertEntryが動くよう、ログイン状態を直接セットする
+    // （fb.login() 経由の完全なログインフローはruncCloudMerge()を誘発し本テストの主眼をぼかすため、
+    // 既存の内部変数(authUser/firebaseReady/fbDb)を直接埋める簡便な方法をとる）
+    env.win.authUser = { uid: "test-uid", email: "t@example.com", displayName: "T", photoURL: "" };
+    env.win.firebaseReady = true;
+    env.win.fbDb = env.fb.firebase.firestore();
+
+    const entry = env.win.tripsStore.find((e) => e.id === "loc1");
+    ok(!!entry && entry.cloudId === "C1", "前提: ローカルのしおりはcloudId=C1を持つ");
+
+    // クラウド側(他端末が既にアップロード済みのバージョン): 項目a2にだけ実績がある。updatedAtはローカルより新しい
+    const cloudTrip = actualsTrip([
+      actualsDay("d1", "2026-08-01", [actualsItem("a1", "スポットA"), actualsItem("a2", "スポットB", { actualStart: "14:00", actualLat: 35.5, actualLon: 139.5, actualAt: 6000 })])
+    ]);
+    const plan = {
+      uploads: [],
+      localUpdates: [{ entry, cloudDoc: { id: "C1", data: JSON.stringify(cloudTrip), updatedAt: 2000, archived: false, publicId: null, editId: null } }],
+      newLocalEntries: []
+    };
+
+    const callsBefore = env.fb.calls.length;
+    T.applyCloudMergePlan(plan);
+    await tick();
+
+    const items = entry.data.days[0].items;
+    const a1 = items.find((i) => i.id === "a1");
+    const a2 = items.find((i) => i.id === "a2");
+    ok(a1 && a1.actualStart === "09:10", "採用したクラウド版に、ローカルにしか無かった項目a1の実績が拾われる", a1);
+    ok(a2 && a2.actualStart === "14:00", "クラウド側にしか無かった項目a2の実績も残る(両方揃う)", a2);
+
+    const newCalls = env.fb.calls.slice(callsBefore);
+    const reuploadCall = newCalls.find((c) => c.op === "set" && c.coll === "trips" && c.id === "C1");
+    ok(!!reuploadCall, "ローカルの実績を拾い上げた結果がクラウド版と異なるため、再度クラウドへアップロードされる(cloudUpsertEntry呼び出し)");
+    if (reuploadCall) {
+      const uploaded = JSON.parse(reuploadCall.payload.data);
+      const ua1 = uploaded.days[0].items.find((i) => i.id === "a1");
+      ok(ua1 && ua1.actualStart === "09:10", "アップロードされたデータにも、ローカルで拾い上げたa1の実績が含まれる(次に他端末が開いたとき両方揃う)", ua1);
+    }
   }
 
   console.log("\n=== 結果 ===");

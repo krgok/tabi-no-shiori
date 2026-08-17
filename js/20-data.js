@@ -342,7 +342,12 @@ function normalizeTrip(raw) {
         // actualLat/actualLon: 記録時に navigator.geolocation が取得できた場合のみの座標（省略可）。
         // lat/lon と同じ防御的正規化（number かつ有限値のみ許容、それ以外は null）
         actualLat: typeof it.actualLat === "number" && isFinite(it.actualLat) ? it.actualLat : null,
-        actualLon: typeof it.actualLon === "number" && isFinite(it.actualLon) ? it.actualLon : null
+        actualLon: typeof it.actualLon === "number" && isFinite(it.actualLon) ? it.actualLon : null,
+        // 実績の端末間マージ（23追記）: actualStart/actualLat/actualLon のいずれかを変更するたびに
+        // 端末ローカル時刻（epoch ms）を記録する。複数端末で別々の項目に実績を記録した場合の
+        // マージ（mergeTripActuals）で「どちらが新しいか」を項目単位で判定するための基準時刻。
+        // number かつ有限値のみ許容、それ以外（未記録・旧データ）は null
+        actualAt: typeof it.actualAt === "number" && isFinite(it.actualAt) ? it.actualAt : null
       };
       if (item.lat == null || item.lon == null) {
         item.coordSrc = null;
@@ -469,7 +474,9 @@ function sanitizeTripForPublic(tripData) {
       // 実績記録（フェーズ1）: actualLat/actualLon（記録時のGPS座標）は「実際にいた場所」そのものを
       // 表す座標のため、予定の座標(lat/lon)より機微な個人情報として扱う。共有・公開・編集リンクの
       // いずれにも一切流さず、ここで必ず削除する。actualStart（到着時刻）は座標を含まず、
-      // 家族との共同編集で実績時刻を共有する価値があるため残す（削除しない）
+      // 家族との共同編集で実績時刻を共有する価値があるため残す（削除しない）。
+      // actualAt（実績の最終更新時刻、23追記）も座標を含まない上、共同編集マージ（mergeDayItems）や
+      // 端末間マージ（mergeTripActuals）が「どちらの実績が新しいか」を判断する材料として使うため残す
       day.items = items
         .filter(function (it) {
           return !removedIds[it.id];
@@ -625,12 +632,36 @@ function mergeDayItems(ownerDay, ownerPublicDay, receivedDay) {
     } else {
       merged.notePriv = false;
     }
+    // 実績の端末間マージ（23追記）: actualStart を常に受信値で無条件採用すると、共同編集者側の
+    // 古いコピー（オーナーが実績記録した後、まだそれを見ていない状態で編集して送り返してきたもの）が
+    // オーナーの新しい実績時刻を巻き戻してしまう。actualAt（実績の最終更新時刻）を比較し、
+    // 新しい方の実績一式（actualStart/actualAt、場合により座標）を採用する。
     // 実績記録（フェーズ1）: actualLat/actualLon は sanitizeTripForPublic で必ず除去されるため、
-    // 受信データ（rit）は常に null しか持たない。そのまま採用するとオーナーが既に記録済みの
-    // 実績GPS座標が共同編集のたびに消えてしまうため、オーナー側の値を保持する。
-    // actualStart（時刻のみ）は非公開情報ではないため、他の一般フィールドと同様に受信値をそのまま採用する
-    merged.actualLat = ownerIt ? ownerIt.actualLat : null;
-    merged.actualLon = ownerIt ? ownerIt.actualLon : null;
+    // 受信データ（rit）は常に null しか持たない。受信側が勝った場合でも rit.actualLat/actualLon は
+    // null のままなので、座標が共有リンク経由でオーナー側に紛れ込むことは絶対に無い
+    // （この保証は sanitizeTripForPublic 側で担保されており、ここでの分岐によらず常に成立する）
+    var ownerActualAt = ownerIt && typeof ownerIt.actualAt === "number" ? ownerIt.actualAt : 0;
+    var receivedActualAt = typeof rit.actualAt === "number" ? rit.actualAt : 0;
+    var receivedWins;
+    if (receivedActualAt !== ownerActualAt) {
+      receivedWins = receivedActualAt > ownerActualAt;
+    } else {
+      // 同値（両方 0/未記録を含む）の場合は actualStart が non-null の側を優先する
+      var ownerHasStart = !!(ownerIt && ownerIt.actualStart != null);
+      var receivedHasStart = rit.actualStart != null;
+      receivedWins = !ownerHasStart && receivedHasStart;
+    }
+    if (receivedWins) {
+      merged.actualStart = rit.actualStart != null ? rit.actualStart : null;
+      merged.actualAt = typeof rit.actualAt === "number" ? rit.actualAt : null;
+      merged.actualLat = null;
+      merged.actualLon = null;
+    } else {
+      merged.actualStart = ownerIt ? ownerIt.actualStart : null;
+      merged.actualAt = ownerIt && typeof ownerIt.actualAt === "number" ? ownerIt.actualAt : null;
+      merged.actualLat = ownerIt ? ownerIt.actualLat : null;
+      merged.actualLon = ownerIt ? ownerIt.actualLon : null;
+    }
     return merged;
   });
 
@@ -708,5 +739,61 @@ function mergeRemoteEditIntoOwnerTrip(ownerTrip, receivedRaw) {
     todosPriv: !!ownerTrip.todosPriv
   };
   // 受信データは他人（共同編集者）が作った可能性がある前提のため、最終結果も必ず normalizeTrip を通す
+  return normalizeTrip(merged);
+}
+
+/* =========================================================
+ * 実績の端末間マージ（23追記）: ログイン時のクラウド同期（computeTripsMergePlan /
+ * applyCloudMergePlan、30-cloud.js）は元々「updatedAt が新しい方のしおりを丸ごと採用」する設計だった。
+ * これは行程表本体の編集（項目の追加・並べ替え等）には妥当だが、実績記録（✓ボタン）は
+ * 複数端末で同時期に少しずつ書き込まれる典型ケースのため、丸ごと採用では
+ * 「携帯で項目Aに実績✓、PCで項目Bに実績✓」のような操作で片方の実績が丸ごと消えてしまう。
+ * そこで実績4フィールド（actualStart/actualLat/actualLon/actualAt）だけは、採用するしおり
+ * （updatedAtが新しい方）に、もう一方のしおりの実績を項目id単位で拾い上げてから使う。
+ * ========================================================= */
+
+// trip（days/items構造）から、項目idをキーにした items のフラットな索引を作る。
+// 項目は編集で別の日へ移動できるため、マージは日をまたいで id だけで照合する
+function buildItemIndexById(t) {
+  var index = {};
+  (t && Array.isArray(t.days) ? t.days : []).forEach(function (d) {
+    (d && Array.isArray(d.items) ? d.items : []).forEach(function (it) {
+      if (it && typeof it.id === "string") index[it.id] = it;
+    });
+  });
+  return index;
+}
+
+// a・b（同じidの項目 or どちらかが未定義）のうち、実績としてどちらを採用すべきかを選ぶ。
+// (actualAt||0) が大きい方を優先し、同値（両方 未記録=0 を含む）なら actualStart が
+// non-null の側を優先する。どちらも決め手が無ければ a（= adoptedTrip 側）を残す
+function pickWinningActualItem(a, b) {
+  var atA = a && typeof a.actualAt === "number" ? a.actualAt : 0;
+  var atB = b && typeof b.actualAt === "number" ? b.actualAt : 0;
+  if (atA !== atB) return atA > atB ? a : b;
+  var aHasStart = !!(a && a.actualStart != null);
+  var bHasStart = !!(b && b.actualStart != null);
+  if (!aHasStart && bHasStart) return b;
+  return a || b;
+}
+
+// mergeTripActuals(adoptedTrip, otherTrip): adoptedTrip（採用する側＝updatedAtが新しい方）の
+// 行程構造はそのまま使い、各項目の実績4フィールドだけを otherTrip（もう一方の端末のしおり）と
+// 項目id単位で比較して、新しい方の実績一式に差し替える。otherTrip 側にしか実績が無かった項目にも、
+// その実績を拾い上げる。どちらの引数も変更しない純粋関数。戻り値は normalizeTrip 済み
+function mergeTripActuals(adoptedTrip, otherTrip) {
+  var otherIndex = buildItemIndexById(otherTrip);
+  var merged = JSON.parse(JSON.stringify(adoptedTrip || {}));
+  (Array.isArray(merged.days) ? merged.days : []).forEach(function (day) {
+    (Array.isArray(day.items) ? day.items : []).forEach(function (it) {
+      var other = otherIndex[it.id];
+      if (!other) return; // 相手側に対応する項目が無ければ adoptedTrip 自身の実績をそのまま残す
+      var winner = pickWinningActualItem(it, other);
+      it.actualStart = winner && winner.actualStart != null ? winner.actualStart : null;
+      it.actualLat = winner && winner.actualLat != null ? winner.actualLat : null;
+      it.actualLon = winner && winner.actualLon != null ? winner.actualLon : null;
+      it.actualAt = winner && typeof winner.actualAt === "number" ? winner.actualAt : null;
+    });
+  });
   return normalizeTrip(merged);
 }

@@ -13,11 +13,11 @@
  * ========================================================= */
 function createSampleTrip() {
   var items = [
-    { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
-    { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true, arriveTz: "", names: {}, noteNames: {} },
-    { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
-    { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
-    { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", priv: false, notePriv: false, fixedStart: "15:00", actualStart: null, actualLat: null, actualLon: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} }
+    { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+    { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true, arriveTz: "", names: {}, noteNames: {} },
+    { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+    { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+    { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", priv: false, notePriv: false, fixedStart: "15:00", actualStart: null, actualLat: null, actualLon: null, actualAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} }
   ];
   return {
     v: 1,
@@ -760,6 +760,8 @@ function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
       actualStartEditingId = null;
       if (commit) {
         item.actualStart = normalizeFixedStart(actualInput.value);
+        // 実績の端末間マージ（23追記）: 手動修正のたびに最終更新時刻を記録する
+        item.actualAt = Date.now();
         saveState();
       }
       render();
@@ -824,6 +826,10 @@ function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
         item.actualStart = null;
         item.actualLat = null;
         item.actualLon = null;
+        // 実績の端末間マージ（23追記）: クリアも「実績の変更」の一種として最終更新時刻を記録する。
+        // これが無いと、他端末が実績を記録した直後にこちらでクリアしても、マージ時にactualAtが
+        // 古いままの「クリア」が敗れてしまい、消したはずの実績が復活しかねない
+        item.actualAt = Date.now();
         saveState();
         render();
       });
@@ -1807,6 +1813,8 @@ function recordActualStart(id) {
   if (!found) return;
   var now = new Date();
   found.item.actualStart = pad2(now.getHours()) + ":" + pad2(now.getMinutes());
+  // 実績の端末間マージ（23追記）: 記録のたびに最終更新時刻を記録する（複数端末での実績マージの判断材料）
+  found.item.actualAt = now.getTime();
   saveState();
   render();
 
@@ -1822,6 +1830,8 @@ function recordActualStart(id) {
       var lonVal = pos.coords.longitude;
       again.item.actualLat = typeof latVal === "number" && isFinite(latVal) ? latVal : null;
       again.item.actualLon = typeof lonVal === "number" && isFinite(lonVal) ? lonVal : null;
+      // 実績の端末間マージ（23追記）: GPS取得成功時も実績の更新とみなし最終更新時刻を進める
+      again.item.actualAt = Date.now();
       // 描画済みの時刻・カード構成は変えないため render() は呼ばない。座標は保存のみ追記する
       saveState();
     },
@@ -1973,6 +1983,7 @@ function addItemFromForm() {
     actualStart: null,
     actualLat: null,
     actualLon: null,
+    actualAt: null,
     lat: null,
     lon: null,
     coordSrc: null,
