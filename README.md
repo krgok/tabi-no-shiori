@@ -30,4 +30,8 @@
 
 ローカルで動かすには `サーバー起動.bat` をダブルクリック（または `python -m http.server 8934`）して http://localhost:8934 を開きます。
 
-詳細仕様は [SPEC.md](SPEC.md) を参照してください。
+詳細仕様は [SPEC.md](SPEC.md)、開発を引き継ぐときは [HANDOFF.md](HANDOFF.md) を参照してください。
+
+```bash
+npm test    # 全テストを実行（変更したら必ず通してからコミット）
+```
