@@ -23,7 +23,8 @@ const TEST_FILES = [
   "test-phase3.js",
   "test-pwa.js",
   "privtest.js",
-  "test-copy-fixedstart.js"
+  "test-copy-fixedstart.js",
+  "test-actual.js"
 ];
 
 let overallFail = false;

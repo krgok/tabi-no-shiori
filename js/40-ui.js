@@ -13,11 +13,11 @@
  * ========================================================= */
 function createSampleTrip() {
   var items = [
-    { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
-    { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true, arriveTz: "", names: {}, noteNames: {} },
-    { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
-    { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", priv: false, notePriv: false, fixedStart: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
-    { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", priv: false, notePriv: false, fixedStart: "15:00", lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} }
+    { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+    { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true, arriveTz: "", names: {}, noteNames: {} },
+    { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+    { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+    { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", priv: false, notePriv: false, fixedStart: "15:00", actualStart: null, actualLat: null, actualLon: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} }
   ];
   return {
     v: 1,
@@ -744,6 +744,94 @@ function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
     localNoteEl.textContent = t("timeline.localTimeNote");
     timeCol.appendChild(localNoteEl);
   }
+
+  // 実績記録（フェーズ1）: item.actualStart があるときだけ「実績 HH:MM (+N分)」を表示する。
+  // クリックで <input type="time"> による手動修正ができる（fixedStart の編集UIと同じパターン）。
+  // viewOnly（公開URL閲覧）中は編集不可: <span>（クリックハンドラ無し）として描画し、
+  // 隣の実績クリアボタンも描画しない（既存の viewOnly ガード方針に従う）
+  if (!viewOnly && actualStartEditingId === item.id) {
+    var actualInput = document.createElement("input");
+    actualInput.type = "time";
+    actualInput.className = "item-actual-input";
+    actualInput.value = item.actualStart || "";
+    actualInput.setAttribute("aria-label", t("timeline.actualInputAria"));
+    var closeActualEditor = function (commit) {
+      if (actualStartEditingId !== item.id) return; // 既に確定/取消済み（二重発火防止。fixedStartと同じガード）
+      actualStartEditingId = null;
+      if (commit) {
+        item.actualStart = normalizeFixedStart(actualInput.value);
+        saveState();
+      }
+      render();
+    };
+    actualInput.addEventListener("change", function () {
+      closeActualEditor(true);
+    });
+    actualInput.addEventListener("blur", function () {
+      closeActualEditor(false);
+    });
+    actualInput.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeActualEditor(false);
+      }
+    });
+    timeCol.appendChild(actualInput);
+    // DOM挿入直後にフォーカスしてピッカーを開きやすくする
+    setTimeout(function () {
+      actualInput.focus();
+    }, 0);
+  } else if (item.actualStart) {
+    var actualRow = document.createElement("div");
+    actualRow.className = "item-actual-row";
+
+    // 予定開始時刻(startMin)との差分。startMinは日跨ぎで1440分を超えうるため、
+    // 暦日境界内の時刻（fixedStartの編集プリセットと同じ minutesToHHMM 相当）に揃えてから比較する
+    var scheduledMinOfDay = ((startMin % 1440) + 1440) % 1440;
+    var actualDiffMin = parseTimeToMinutes(item.actualStart) - scheduledMinOfDay;
+
+    var actualBtn = document.createElement(viewOnly ? "span" : "button");
+    if (!viewOnly) actualBtn.type = "button";
+    actualBtn.className = "item-actual-display";
+    var actualDiffText = "";
+    if (actualDiffMin > 0) {
+      actualBtn.classList.add("is-late");
+      actualDiffText = " (+" + actualDiffMin + window.I18N.DURATION_UNITS[lang()] + ")";
+    } else if (actualDiffMin < 0) {
+      actualBtn.classList.add("is-early");
+      actualDiffText = " (" + actualDiffMin + window.I18N.DURATION_UNITS[lang()] + ")";
+    }
+    actualBtn.textContent = t("timeline.actualLabel") + " " + item.actualStart + actualDiffText;
+    actualBtn.title = t("timeline.actualEditHint");
+    if (!viewOnly) {
+      actualBtn.addEventListener("click", function () {
+        if (viewOnly) return;
+        actualStartEditingId = item.id;
+        render();
+      });
+    }
+    actualRow.appendChild(actualBtn);
+
+    if (!viewOnly) {
+      var actualClearBtn = document.createElement("button");
+      actualClearBtn.type = "button";
+      actualClearBtn.className = "item-actual-clear-btn";
+      actualClearBtn.textContent = "×";
+      actualClearBtn.title = t("timeline.actualClearAria");
+      actualClearBtn.setAttribute("aria-label", t("timeline.actualClearAria"));
+      actualClearBtn.addEventListener("click", function () {
+        if (viewOnly) return;
+        item.actualStart = null;
+        item.actualLat = null;
+        item.actualLon = null;
+        saveState();
+        render();
+      });
+      actualRow.appendChild(actualClearBtn);
+    }
+    timeCol.appendChild(actualRow);
+  }
+
   card.appendChild(timeCol);
 
   var body = document.createElement("div");
@@ -1114,6 +1202,19 @@ function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
   // 名前欄に横幅を回すため（.item-action-col のCSS参照）
   var actionCol = document.createElement("div");
   actionCol.className = "item-action-col";
+
+  // 実績記録（フェーズ1）: 押すと現在時刻を actualStart に記録する（記録済みなら現在時刻で上書き）。
+  // viewOnly（公開URL閲覧）中は既存の編集系ボタンと同じ扱いでCSS側（body.view-only-mode）から非表示にする
+  var actualRecordBtn = document.createElement("button");
+  actualRecordBtn.type = "button";
+  actualRecordBtn.className = "item-actual-record-btn";
+  actualRecordBtn.textContent = "✓";
+  actualRecordBtn.title = t("timeline.actualRecordBtnTitle");
+  actualRecordBtn.setAttribute("aria-label", t("timeline.actualRecordBtnTitle"));
+  actualRecordBtn.addEventListener("click", function () {
+    recordActualStart(item.id);
+  });
+  actionCol.appendChild(actualRecordBtn);
 
   // 非公開マーク（14）: 項目まるごとの 🔓/🔒 トグル（複製・削除ボタンと並べて配置）
   var privBtn = document.createElement("button");
@@ -1683,6 +1784,55 @@ function deleteItem(id) {
   });
 }
 
+// 実績記録（フェーズ1）: 項目をIDで全ての日から探す。✓ボタンのGPSコールバックは非同期のため、
+// 呼ばれた時点で表示中の日（currentDayIndex）が変わっている可能性があり、日をまたいで探す必要がある
+function findAnyDayItemById(id) {
+  for (var d = 0; d < trip.days.length; d++) {
+    var items = trip.days[d].items;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].id === id) return { day: trip.days[d], item: items[i] };
+    }
+  }
+  return null;
+}
+
+// 実績記録（フェーズ1）: ✓ボタンの中核。押した瞬間の端末ローカル時刻を actualStart に記録する
+// （既に記録済みでも現在時刻で上書きする）。GPS完全自動追尾はしない設計（PWAはバックグラウンドで
+// 位置取得できないため、常時追跡は成立しない）。可能なら1回だけ現在地を取得して actualLat/actualLon に
+// 追記するが、これは非同期のおまけ扱いとし、時刻の記録と再描画はGPSの結果を待たずに即座に行う。
+// navigator.geolocation が無い環境（jsdomでのテスト含む）でも時刻の記録自体は動くようガードする
+function recordActualStart(id) {
+  if (viewOnly) return;
+  var found = findAnyDayItemById(id);
+  if (!found) return;
+  var now = new Date();
+  found.item.actualStart = pad2(now.getHours()) + ":" + pad2(now.getMinutes());
+  saveState();
+  render();
+
+  if (!window.navigator || !navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") {
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    function (pos) {
+      if (viewOnly) return; // 待っている間にモードが変わっていたら書き込まない（多層ガード）
+      var again = findAnyDayItemById(id);
+      if (!again || !pos || !pos.coords) return;
+      var latVal = pos.coords.latitude;
+      var lonVal = pos.coords.longitude;
+      again.item.actualLat = typeof latVal === "number" && isFinite(latVal) ? latVal : null;
+      again.item.actualLon = typeof lonVal === "number" && isFinite(lonVal) ? lonVal : null;
+      // 描画済みの時刻・カード構成は変えないため render() は呼ばない。座標は保存のみ追記する
+      saveState();
+    },
+    function () {
+      // 権限拒否・タイムアウト等はよくあるケースで、時刻の記録は既に完了しているため黙って無視する
+      // （トーストで毎回騒ぐと煩わしい）
+    },
+    { timeout: 10000 }
+  );
+}
+
 // 項目を1つ上/下へ動かす。ドラッグが使えない場面（キーボード操作・細かい調整）の補助。
 // 端まで来たら前後の日へ移す（「この観光を2日目に回す」が複製+削除なしでできる）
 function nudgeItem(id, dir) {
@@ -1820,6 +1970,9 @@ function addItemFromForm() {
     priv: false,
     notePriv: false,
     fixedStart: null,
+    actualStart: null,
+    actualLat: null,
+    actualLon: null,
     lat: null,
     lon: null,
     coordSrc: null,

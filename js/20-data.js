@@ -334,10 +334,23 @@ function normalizeTrip(raw) {
         notePriv: !!it.notePriv,
         // 開始時刻の手動固定（17）: move含む全カテゴリー共通。既定 null（未固定）。
         // "HH:MM" 形式以外・範囲外の値は normalizeFixedStart が防御的に null にフォールバックする
-        fixedStart: normalizeFixedStart(it.fixedStart)
+        fixedStart: normalizeFixedStart(it.fixedStart),
+        // 実績記録（フェーズ1）: move含む全カテゴリー共通。既定 null（未記録）。
+        // actualStart は "✓" ボタンを押した時点の端末ローカル時刻（"HH:MM"）。
+        // fixedStart と同じ検証経路（normalizeFixedStart）を通し、不正値は防御的に null にする
+        actualStart: normalizeFixedStart(it.actualStart),
+        // actualLat/actualLon: 記録時に navigator.geolocation が取得できた場合のみの座標（省略可）。
+        // lat/lon と同じ防御的正規化（number かつ有限値のみ許容、それ以外は null）
+        actualLat: typeof it.actualLat === "number" && isFinite(it.actualLat) ? it.actualLat : null,
+        actualLon: typeof it.actualLon === "number" && isFinite(it.actualLon) ? it.actualLon : null
       };
       if (item.lat == null || item.lon == null) {
         item.coordSrc = null;
+      }
+      // 実績記録: 片方だけ有効値でもう片方が欠けているのは不完全なデータのため、両方揃わなければ捨てる
+      if (item.actualLat == null || item.actualLon == null) {
+        item.actualLat = null;
+        item.actualLon = null;
       }
       // スポット名の多言語表示（3c 追記）: move も含む全カテゴリー共通で names を持つ。
       // move は「前後スポットから組み立てる A → B」表示を優先するが、それが組み立てられない
@@ -452,7 +465,11 @@ function sanitizeTripForPublic(tripData) {
         }
       });
 
-      // 4. 削除対象を取り除き、priv/notePriv フラグ自体も消す
+      // 4. 削除対象を取り除き、priv/notePriv フラグ自体も消す。
+      // 実績記録（フェーズ1）: actualLat/actualLon（記録時のGPS座標）は「実際にいた場所」そのものを
+      // 表す座標のため、予定の座標(lat/lon)より機微な個人情報として扱う。共有・公開・編集リンクの
+      // いずれにも一切流さず、ここで必ず削除する。actualStart（到着時刻）は座標を含まず、
+      // 家族との共同編集で実績時刻を共有する価値があるため残す（削除しない）
       day.items = items
         .filter(function (it) {
           return !removedIds[it.id];
@@ -460,6 +477,8 @@ function sanitizeTripForPublic(tripData) {
         .map(function (it) {
           delete it.priv;
           delete it.notePriv;
+          it.actualLat = null;
+          it.actualLon = null;
           return it;
         });
     });
@@ -606,6 +625,12 @@ function mergeDayItems(ownerDay, ownerPublicDay, receivedDay) {
     } else {
       merged.notePriv = false;
     }
+    // 実績記録（フェーズ1）: actualLat/actualLon は sanitizeTripForPublic で必ず除去されるため、
+    // 受信データ（rit）は常に null しか持たない。そのまま採用するとオーナーが既に記録済みの
+    // 実績GPS座標が共同編集のたびに消えてしまうため、オーナー側の値を保持する。
+    // actualStart（時刻のみ）は非公開情報ではないため、他の一般フィールドと同様に受信値をそのまま採用する
+    merged.actualLat = ownerIt ? ownerIt.actualLat : null;
+    merged.actualLon = ownerIt ? ownerIt.actualLon : null;
     return merged;
   });
 
