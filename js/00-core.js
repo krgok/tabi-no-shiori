@@ -13,7 +13,7 @@
  * ========================================================= */
 // ⚙️設定モーダルに表示する版数（サポート時に「更新が端末に届いたか」を確認する手掛かり）。
 // sw.js の CACHE_VERSION と常に同じ値にすること。一致は tests/test-pwa.js がCIで検知する
-var APP_VERSION = "v6";
+var APP_VERSION = "v7";
 var STORAGE_KEY_V1 = "tabi-shiori-v1";
 var STORAGE_KEY = "tabi-shiori-v2"; // v2: { currentId, trips: [{ id, data: <trip> }] }（複数しおりの管理 9）
 var GEO_CACHE_KEY = "tabi-geo-cache";

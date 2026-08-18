@@ -443,6 +443,9 @@ function unpublishEditLink(onDone) {
 //   対応する文書が見当たらない場合＝クラウド側で消えた場合も、アップロードして復元する）
 // - cloudId を持たないローカルエントリ（ログイン前に作成したしおり）: 常にアップロード対象にする
 // - どのローカルエントリにも対応しないクラウド文書: 新規ローカルエントリとして追加する対象にする
+// 実績の端末間マージ（23追記、アップロード方向）: uploads の要素は { entry, cloudDoc } の形にする
+// （cloudDoc は対応するクラウド文書が見つかった場合のみ、無ければ null）。applyCloudMergePlan 側で
+// アップロード前にクラウド版の実績を拾い上げるために、対応するクラウド文書を渡せるようにしている
 function computeTripsMergePlan(localTrips, cloudDocs) {
   var uploads = [];
   var localUpdates = [];
@@ -465,13 +468,13 @@ function computeTripsMergePlan(localTrips, cloudDocs) {
         if (cloudUpdatedAt > localUpdatedAt) {
           localUpdates.push({ entry: entry, cloudDoc: match });
         } else {
-          uploads.push(entry);
+          uploads.push({ entry: entry, cloudDoc: match });
         }
       } else {
-        uploads.push(entry);
+        uploads.push({ entry: entry, cloudDoc: null });
       }
     } else {
-      uploads.push(entry);
+      uploads.push({ entry: entry, cloudDoc: null });
     }
   });
 
@@ -526,12 +529,29 @@ function applyCloudMergePlan(plan) {
     });
   });
 
+  // 実績の端末間マージ（23追記、アップロード方向）: ローカルを採用してアップロードする側（updatedAtが
+  // 同値以上、またはクラウド側が消えていた場合）でも、対応するクラウド文書があるなら丸ごと上書きせず、
+  // クラウド版にしか無い実績（他端末が先にアップロード済みのもの）を entry.data に拾い上げてから
+  // アップロードする。computeTripsMergePlan は updatedAt 同値でも毎回 uploads に入れる仕様
+  // （オフライン編集の回収を兼ねるため。#3参照）なので、これをしないと起動のたびに他端末の実績が
+  // 消える恐れがある。拾い上げた結果は entry.data にも反映し、ローカル側にも取り込む
+  plan.uploads.forEach(function (u) {
+    if (!u.cloudDoc) return; // クラウド側に対応する文書が無い（新規/消失）場合は従来通り丸ごとアップロード
+    var parsed = safeParseTripJSON(u.cloudDoc.data);
+    if (!parsed) return; // クラウド版データが壊れたJSONの場合も従来通り丸ごとアップロード
+    var cloudTrip = normalizeTrip(parsed);
+    u.entry.data = mergeTripActuals(u.entry.data, cloudTrip);
+    // 公開URL閲覧（16）・編集できる共有リンク（18）: viewOnly/collabMode 中は trip が他人のしおりを
+    // 指しているため上書きしない（localUpdates 側と同じガード）
+    if (!viewOnly && !collabMode && u.entry.id === currentTripId) trip = u.entry.data;
+  });
+
   persistLocalOnly();
   render();
   syncEditListenerForCurrentTrip();
 
-  plan.uploads.forEach(function (entry) {
-    cloudUpsertEntry(entry);
+  plan.uploads.forEach(function (u) {
+    cloudUpsertEntry(u.entry);
   });
   // 実績の端末間マージ（23追記）: 拾い上げた実績をクラウドへも反映する（uploads とは重複しない集合のため単純に追加）
   actualsReconciledEntries.forEach(function (entry) {

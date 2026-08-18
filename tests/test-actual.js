@@ -644,6 +644,137 @@ function actualsTrip(days) {
     }
   }
 
+  /* ================================================================ */
+  section("17. applyCloudMergePlan経由(uploads方向): クラウド版にしか無い実績が拾われ、アップロード後のデータにもローカルにも残る");
+  {
+    // ローカル版: 項目x1に実績なし。updatedAtはクラウドと同値（＝前回同期から双方変化なし、
+    // または computeTripsMergePlan の仕様で毎回uploadsに入るケースを再現）
+    const localTrip = actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("x1", "項目X")])]);
+    const storage = {
+      [STORAGE_KEY]: JSON.stringify({
+        currentId: "loc1",
+        trips: [{ id: "loc1", data: localTrip, archived: false, cloudId: "C2", updatedAt: 2000, publicId: null, editId: null }]
+      })
+    };
+    const env = boot({ localStorage: storage });
+    await tick();
+
+    const T = env.win.__tabiShioriCollabInternals;
+    env.win.authUser = { uid: "test-uid", email: "t@example.com", displayName: "T", photoURL: "" };
+    env.win.firebaseReady = true;
+    env.win.fbDb = env.fb.firebase.firestore();
+
+    const entry = env.win.tripsStore.find((e) => e.id === "loc1");
+    ok(!!entry && entry.cloudId === "C2", "前提: ローカルのしおりはcloudId=C2を持つ");
+
+    // クラウド側: 項目x1に他端末が記録した実績がある。updatedAtはローカルと同値
+    // （同値なのでcomputeTripsMergePlanの分岐上はuploads扱いになる）
+    const cloudTrip = actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("x1", "項目X", { actualStart: "14:20", actualLat: 35.2, actualLon: 139.3, actualAt: 7000 })])]);
+    const cloudDoc = { id: "C2", data: JSON.stringify(cloudTrip), updatedAt: 2000, archived: false, publicId: null, editId: null };
+    const plan = T.computeTripsMergePlan([entry], [cloudDoc]);
+    ok(plan.uploads.length === 1 && plan.uploads[0].entry === entry && plan.uploads[0].cloudDoc === cloudDoc, "updatedAt同値はuploads対象になり、対応するクラウド文書がcloudDocとして添えられる");
+    ok(plan.localUpdates.length === 0, "updatedAt同値はlocalUpdatesには入らない");
+
+    const callsBefore = env.fb.calls.length;
+    T.applyCloudMergePlan(plan);
+    await tick();
+
+    const x1 = entry.data.days[0].items.find((i) => i.id === "x1");
+    ok(x1 && x1.actualStart === "14:20", "アップロード前にクラウド版の実績が拾われ、ローカルのentry.dataにも取り込まれる", x1);
+
+    const newCalls = env.fb.calls.slice(callsBefore);
+    const uploadCall = newCalls.find((c) => c.op === "set" && c.coll === "trips" && c.id === "C2");
+    ok(!!uploadCall, "通常どおりアップロードが実行される");
+    if (uploadCall) {
+      const uploaded = JSON.parse(uploadCall.payload.data);
+      const ux1 = uploaded.days[0].items.find((i) => i.id === "x1");
+      ok(ux1 && ux1.actualStart === "14:20", "アップロードされるデータにもクラウド版の実績が残り、丸ごと上書きで消えない(他端末の実績が消失するバグの再発防止)", ux1);
+    }
+  }
+
+  /* ================================================================ */
+  section("18. applyCloudMergePlan経由(uploads方向): ローカル・クラウド双方の別項目の実績が合流する");
+  {
+    const localTrip = actualsTrip([
+      actualsDay("d1", "2026-08-01", [actualsItem("y1", "項目Y1", { actualStart: "08:00", actualAt: 3000 }), actualsItem("y2", "項目Y2")])
+    ]);
+    const storage = {
+      [STORAGE_KEY]: JSON.stringify({
+        currentId: "loc1",
+        trips: [{ id: "loc1", data: localTrip, archived: false, cloudId: "C3", updatedAt: 3000, publicId: null, editId: null }]
+      })
+    };
+    const env = boot({ localStorage: storage });
+    await tick();
+
+    const T = env.win.__tabiShioriCollabInternals;
+    env.win.authUser = { uid: "test-uid", email: "t@example.com", displayName: "T", photoURL: "" };
+    env.win.firebaseReady = true;
+    env.win.fbDb = env.fb.firebase.firestore();
+
+    const entry = env.win.tripsStore.find((e) => e.id === "loc1");
+    const cloudTrip = actualsTrip([
+      actualsDay("d1", "2026-08-01", [actualsItem("y1", "項目Y1"), actualsItem("y2", "項目Y2", { actualStart: "16:45", actualAt: 4000 })])
+    ]);
+    const cloudDoc = { id: "C3", data: JSON.stringify(cloudTrip), updatedAt: 3000, archived: false, publicId: null, editId: null };
+    const plan = T.computeTripsMergePlan([entry], [cloudDoc]);
+
+    T.applyCloudMergePlan(plan);
+    await tick();
+
+    const items = entry.data.days[0].items;
+    const y1 = items.find((i) => i.id === "y1");
+    const y2 = items.find((i) => i.id === "y2");
+    ok(y1 && y1.actualStart === "08:00", "ローカルにしか無かった項目Y1の実績が残る", y1);
+    ok(y2 && y2.actualStart === "16:45", "クラウドにしか無かった項目Y2の実績も合流して残る", y2);
+  }
+
+  /* ================================================================ */
+  section("19. applyCloudMergePlan経由(uploads方向): クラウド版dataが壊れたJSONでも例外にならず従来通りアップロードされる");
+  {
+    const localTrip = actualsTrip([actualsDay("d1", "2026-08-01", [actualsItem("z1", "項目Z", { actualStart: "07:00", actualAt: 1000 })])]);
+    const storage = {
+      [STORAGE_KEY]: JSON.stringify({
+        currentId: "loc1",
+        trips: [{ id: "loc1", data: localTrip, archived: false, cloudId: "C4", updatedAt: 9000, publicId: null, editId: null }]
+      })
+    };
+    const env = boot({ localStorage: storage });
+    await tick();
+
+    const T = env.win.__tabiShioriCollabInternals;
+    env.win.authUser = { uid: "test-uid", email: "t@example.com", displayName: "T", photoURL: "" };
+    env.win.firebaseReady = true;
+    env.win.fbDb = env.fb.firebase.firestore();
+
+    const entry = env.win.tripsStore.find((e) => e.id === "loc1");
+    // 壊れたJSON（例えば通信エラー時の空文字列や破損データを想定）
+    const cloudDoc = { id: "C4", data: "{not valid json", updatedAt: 9000, archived: false, publicId: null, editId: null };
+    const plan = T.computeTripsMergePlan([entry], [cloudDoc]);
+
+    let threw = false;
+    const callsBefore = env.fb.calls.length;
+    try {
+      T.applyCloudMergePlan(plan);
+      await tick();
+    } catch (e) {
+      threw = true;
+    }
+    ok(!threw, "クラウド版dataが壊れたJSONでも例外を投げない");
+
+    const z1 = entry.data.days[0].items.find((i) => i.id === "z1");
+    ok(z1 && z1.actualStart === "07:00", "マージをスキップしてローカルのentry.dataはそのまま残る", z1);
+
+    const newCalls = env.fb.calls.slice(callsBefore);
+    const uploadCall = newCalls.find((c) => c.op === "set" && c.coll === "trips" && c.id === "C4");
+    ok(!!uploadCall, "壊れたJSONでもアップロード自体は従来通り実行される");
+    if (uploadCall) {
+      const uploaded = JSON.parse(uploadCall.payload.data);
+      const uz1 = uploaded.days[0].items.find((i) => i.id === "z1");
+      ok(uz1 && uz1.actualStart === "07:00", "アップロードされるデータはローカルの実績を保持したまま丸ごとアップロードされる", uz1);
+    }
+  }
+
   console.log("\n=== 結果 ===");
   const r = results();
   console.log(`PASS=${r.pass} FAIL=${r.fail}`);
