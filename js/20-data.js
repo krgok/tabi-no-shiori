@@ -347,7 +347,11 @@ function normalizeTrip(raw) {
         // 端末ローカル時刻（epoch ms）を記録する。複数端末で別々の項目に実績を記録した場合の
         // マージ（mergeTripActuals）で「どちらが新しいか」を項目単位で判定するための基準時刻。
         // number かつ有限値のみ許容、それ以外（未記録・旧データ）は null
-        actualAt: typeof it.actualAt === "number" && isFinite(it.actualAt) ? it.actualAt : null
+        actualAt: typeof it.actualAt === "number" && isFinite(it.actualAt) ? it.actualAt : null,
+        // メモの端末間マージ（23追記・実績と同様の不具合修正）: note を変更（入力・修正・クリア）
+        // するたびに端末ローカル時刻（epoch ms）を記録する。actualAt と同じ役割・同じ防御的正規化。
+        // CSVには追加しない（内部管理用。インポート項目は null になる）
+        noteAt: typeof it.noteAt === "number" && isFinite(it.noteAt) ? it.noteAt : null
       };
       if (item.lat == null || item.lon == null) {
         item.coordSrc = null;
@@ -463,10 +467,15 @@ function sanitizeTripForPublic(tripData) {
       // 3. notePriv:true の項目（削除されないもの）は note を空にする。
       // メモの多言語表示（3c 追記）: noteNames は翻訳済みメモそのものなので、note と同様に空にしないと
       // 非公開にした意味が無い（noteNames 経由でメモ内容が公開コピーに漏れてしまう）
+      // メモの端末間マージ（23追記）: noteAt も note と揃えて削除する。note が空の理由が
+      // 「本当に未記入」なのか「非公開で隠している」なのかをマージ側が誤って区別できてしまう
+      // （＝非公開のはずのメモの有無や更新時刻が noteAt 経由で推測できてしまう）のを防ぐため。
+      // note が残る項目（notePriv でない項目）では noteAt もそのまま残す（マージ判断に使うため）
       items.forEach(function (it) {
         if (it && it.notePriv) {
           it.note = "";
           it.noteNames = {};
+          it.noteAt = null;
         }
       });
 
@@ -629,8 +638,32 @@ function mergeDayItems(ownerDay, ownerPublicDay, receivedDay) {
       merged.notePriv = true;
       merged.note = ownerIt.note;
       merged.noteNames = ownerIt.noteNames;
+      merged.noteAt = ownerIt && typeof ownerIt.noteAt === "number" ? ownerIt.noteAt : null;
     } else {
       merged.notePriv = false;
+      // メモの端末間マージ（23追記・実績と同様の不具合修正）: notePriv でない項目に限り、
+      // note を「常に受信値で無条件採用」ではなく noteAt（更新時刻）比較で新しい方を採用する。
+      // ロジックは actualStart の noteAt 版（同値なら note が非空の側を優先）で、notePriv 項目の
+      // 上の保護（オーナー側のメモを常に保持）は一切変えない
+      var ownerNoteAt = ownerIt && typeof ownerIt.noteAt === "number" ? ownerIt.noteAt : 0;
+      var receivedNoteAt = typeof rit.noteAt === "number" ? rit.noteAt : 0;
+      var receivedNoteWins;
+      if (receivedNoteAt !== ownerNoteAt) {
+        receivedNoteWins = receivedNoteAt > ownerNoteAt;
+      } else {
+        var ownerHasNote = !!(ownerIt && ownerIt.note);
+        var receivedHasNote = !!rit.note;
+        receivedNoteWins = !ownerHasNote && receivedHasNote;
+      }
+      if (receivedNoteWins) {
+        merged.note = typeof rit.note === "string" ? rit.note : "";
+        merged.noteAt = typeof rit.noteAt === "number" ? rit.noteAt : null;
+        merged.noteNames = rit.noteNames && typeof rit.noteNames === "object" ? rit.noteNames : {};
+      } else {
+        merged.note = ownerIt ? ownerIt.note : typeof rit.note === "string" ? rit.note : "";
+        merged.noteAt = ownerIt && typeof ownerIt.noteAt === "number" ? ownerIt.noteAt : null;
+        merged.noteNames = ownerIt && ownerIt.noteNames && typeof ownerIt.noteNames === "object" ? ownerIt.noteNames : {};
+      }
     }
     // 実績の端末間マージ（23追記）: actualStart を常に受信値で無条件採用すると、共同編集者側の
     // 古いコピー（オーナーが実績記録した後、まだそれを見ていない状態で編集して送り返してきたもの）が
@@ -777,22 +810,45 @@ function pickWinningActualItem(a, b) {
   return a || b;
 }
 
+// メモの端末間マージ（23追記・実績と同様の不具合修正）: a・b のうち、メモとしてどちらを採用すべきかを
+// 選ぶ。ロジックは pickWinningActualItem と同型: (noteAt||0) が大きい方を優先し、同値（両方 0 を含む）
+// なら note が非空の側を優先する（過去データは両方 noteAt=0 のため、このタイブレークで
+// 「片方にしか無いメモ」が救出される）。どちらも決め手が無ければ a（= adoptedTrip 側）を残す
+function pickWinningNoteItem(a, b) {
+  var atA = a && typeof a.noteAt === "number" ? a.noteAt : 0;
+  var atB = b && typeof b.noteAt === "number" ? b.noteAt : 0;
+  if (atA !== atB) return atA > atB ? a : b;
+  var aHasNote = !!(a && a.note);
+  var bHasNote = !!(b && b.note);
+  if (!aHasNote && bHasNote) return b;
+  return a || b;
+}
+
 // mergeTripActuals(adoptedTrip, otherTrip): adoptedTrip（採用する側＝updatedAtが新しい方）の
-// 行程構造はそのまま使い、各項目の実績4フィールドだけを otherTrip（もう一方の端末のしおり）と
-// 項目id単位で比較して、新しい方の実績一式に差し替える。otherTrip 側にしか実績が無かった項目にも、
-// その実績を拾い上げる。どちらの引数も変更しない純粋関数。戻り値は normalizeTrip 済み
+// 行程構造はそのまま使い、各項目の実績4フィールドと「メモ（note/noteAt）の組」だけを otherTrip
+// （もう一方の端末のしおり）と項目id単位で比較して、新しい方の一式に差し替える。otherTrip 側にしか
+// 実績/メモが無かった項目にも、それを拾い上げる。どちらの引数も変更しない純粋関数。戻り値は normalizeTrip 済み。
+// メモの端末間マージ（23追記）: 関数名は実績記録フェーズ1のまま据え置いているが、実態は
+// 「複数端末で同時に少しずつ書き込まれるフィールド（実績4項目＋メモ）」をまとめて項目単位マージする関数
 function mergeTripActuals(adoptedTrip, otherTrip) {
   var otherIndex = buildItemIndexById(otherTrip);
   var merged = JSON.parse(JSON.stringify(adoptedTrip || {}));
   (Array.isArray(merged.days) ? merged.days : []).forEach(function (day) {
     (Array.isArray(day.items) ? day.items : []).forEach(function (it) {
       var other = otherIndex[it.id];
-      if (!other) return; // 相手側に対応する項目が無ければ adoptedTrip 自身の実績をそのまま残す
+      if (!other) return; // 相手側に対応する項目が無ければ adoptedTrip 自身の実績・メモをそのまま残す
       var winner = pickWinningActualItem(it, other);
       it.actualStart = winner && winner.actualStart != null ? winner.actualStart : null;
       it.actualLat = winner && winner.actualLat != null ? winner.actualLat : null;
       it.actualLon = winner && winner.actualLon != null ? winner.actualLon : null;
       it.actualAt = winner && typeof winner.actualAt === "number" ? winner.actualAt : null;
+
+      // メモ（note/noteAt の組）も同じ考え方で項目id単位マージする。noteNames（翻訳キャッシュ）は
+      // 採用したメモの側のものを一緒に引き継ぐ（テキストと翻訳文がずれないように）
+      var noteWinner = pickWinningNoteItem(it, other);
+      it.note = noteWinner && typeof noteWinner.note === "string" ? noteWinner.note : "";
+      it.noteAt = noteWinner && typeof noteWinner.noteAt === "number" ? noteWinner.noteAt : null;
+      it.noteNames = noteWinner && noteWinner.noteNames && typeof noteWinner.noteNames === "object" ? noteWinner.noteNames : {};
     });
   });
   return normalizeTrip(merged);
