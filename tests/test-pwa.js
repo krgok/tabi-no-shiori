@@ -31,6 +31,9 @@ function section(title) {
 
 const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
+const core = fs.readFileSync(path.join(ROOT, "js", "00-core.js"), "utf8");
+const ui = fs.readFileSync(path.join(ROOT, "js", "40-ui.js"), "utf8");
+const i18n = fs.readFileSync(path.join(ROOT, "i18n.js"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.webmanifest"), "utf8"));
 
 // sw.js のプリキャッシュ配列を取り出す
@@ -121,6 +124,31 @@ section("7. Service Worker の登録");
   ok(/serviceWorker" in navigator/.test(app), "非対応ブラウザを判定している");
   ok(/location\.protocol !== "http:"/.test(app), "file:// で開いた場合は登録しない（例外を避ける）");
   ok(/pwa\.updated/.test(app), "新しい版が来たら通知する");
+}
+
+section("8. アプリの版数表示（js/00-core.js の APP_VERSION と sw.js の CACHE_VERSION）");
+{
+  // CACHE_VERSION の上げ忘れ事故（HANDOFF.md 4-4）の再発防止: 更新時にどちらか片方だけ
+  // 上げ忘れると、⚙️設定モーダルに表示される版数とキャッシュの実体がズレてサポートの
+  // 切り分けができなくなる。2つの定義が常に一致していることをCIで検知する
+  const coreMatch = /var APP_VERSION = "([^"]+)"/.exec(core);
+  const swMatch = /var CACHE_VERSION = "([^"]+)"/.exec(sw);
+  ok(!!coreMatch, "js/00-core.js に APP_VERSION が定義されている");
+  ok(!!swMatch, "sw.js に CACHE_VERSION が定義されている");
+  if (coreMatch && swMatch) {
+    ok(
+      coreMatch[1] === swMatch[1],
+      "APP_VERSION と CACHE_VERSION が一致している",
+      { APP_VERSION: coreMatch[1], CACHE_VERSION: swMatch[1] }
+    );
+  }
+
+  // 設定モーダルに版数が表示されること
+  ok(/id="settingsVersion"/.test(html), "index.html の設定モーダルに版数表示欄がある");
+  ok(/el\.settingsVersion\s*=\s*document\.getElementById\("settingsVersion"\)/.test(ui), "js/40-ui.js が版数表示欄を参照している");
+  ok(/el\.settingsVersion\.textContent\s*=\s*t\("settings\.version",\s*\{\s*v:\s*APP_VERSION\s*\}\)/.test(ui), "js/40-ui.js が APP_VERSION を版数表示欄に反映している");
+  const versionKeyCount = (i18n.match(/"settings\.version"\s*:/g) || []).length;
+  ok(versionKeyCount === 4, "i18n.js の4言語（ja/en/zh/th）すべてに settings.version キーがある", versionKeyCount);
 }
 
 console.log("\n================================");

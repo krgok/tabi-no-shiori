@@ -190,6 +190,7 @@ function cacheDom() {
   el.settingsBackupBtn = document.getElementById("settingsBackupBtn");
   el.settingsRestoreBtn = document.getElementById("settingsRestoreBtn");
   el.settingsRestoreInput = document.getElementById("settingsRestoreInput");
+  el.settingsVersion = document.getElementById("settingsVersion");
 
   el.confirmModal = document.getElementById("confirmModal");
   el.confirmTitle = document.getElementById("confirmTitle");
@@ -268,6 +269,11 @@ function applyExtraI18n() {
   });
   if (el.tripTitle) {
     el.tripTitle.setAttribute("data-placeholder", t("header.titlePlaceholder"));
+  }
+  // アプリの版数表示（サポート時に「更新が端末に届いたか」を確認する手掛かり）。
+  // sw.js の CACHE_VERSION と常に同じ値の APP_VERSION（js/00-core.js）を表示する
+  if (el.settingsVersion) {
+    el.settingsVersion.textContent = t("settings.version", { v: APP_VERSION });
   }
 }
 

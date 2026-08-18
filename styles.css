@@ -1784,6 +1784,15 @@ select {
   opacity: 0.85;
 }
 
+/* アプリの版数表示（設定モーダル末尾。サポート時の切り分け用、邪魔にならないよう小さく薄く） */
+.settings-version {
+  margin: 10px 0 0;
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+  opacity: 0.6;
+  text-align: right;
+}
+
 .auth-email {
   font-size: 0.85rem;
   font-weight: 600;
