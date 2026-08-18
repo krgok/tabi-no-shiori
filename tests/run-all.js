@@ -24,7 +24,8 @@ const TEST_FILES = [
   "test-pwa.js",
   "privtest.js",
   "test-copy-fixedstart.js",
-  "test-actual.js"
+  "test-actual.js",
+  "test-note-merge.js"
 ];
 
 let overallFail = false;

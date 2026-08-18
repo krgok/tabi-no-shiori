@@ -13,11 +13,11 @@
  * ========================================================= */
 function createSampleTrip() {
   var items = [
-    { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
-    { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true, arriveTz: "", names: {}, noteNames: {} },
-    { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
-    { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
-    { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", priv: false, notePriv: false, fixedStart: "15:00", actualStart: null, actualLat: null, actualLon: null, actualAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} }
+    { id: genId(), cat: "sight", name: "浅草寺", loc: "", dur: 90, note: "雷門で写真", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, noteAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+    { id: genId(), cat: "move", name: "浅草寺 → 上野公園", loc: "", dur: 25, note: "", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, noteAt: null, lat: null, lon: null, coordSrc: null, mode: "train", distKm: 6.2, auto: true, arriveTz: "", names: {}, noteNames: {} },
+    { id: genId(), cat: "sight", name: "上野公園", loc: "", dur: 60, note: "散策", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, noteAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+    { id: genId(), cat: "meal", name: "上野でランチ", loc: "", dur: 60, note: "", priv: false, notePriv: false, fixedStart: null, actualStart: null, actualLat: null, actualLon: null, actualAt: null, noteAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} },
+    { id: genId(), cat: "stay", name: "三井ガーデンホテル上野", loc: "", dur: 0, note: "チェックイン15:00", priv: false, notePriv: false, fixedStart: "15:00", actualStart: null, actualLat: null, actualLon: null, actualAt: null, noteAt: null, lat: null, lon: null, coordSrc: null, gmap: "", gmapAuto: false, names: {}, noteNames: {} }
   ];
   return {
     v: 1,
@@ -1164,6 +1164,11 @@ function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
     if (newNote !== item.note) {
       // メモを編集したら、古い翻訳が残らないようその項目の noteNames を全消去する（3c 追記）
       item.noteNames = {};
+      // メモの端末間マージ（23追記・実績と同様の不具合修正）: note を変更（入力・修正・クリア）する
+      // たびに端末ローカル時刻を記録する。mergeTripActuals / mergeDayItems がこの値を比較して
+      // 「どちらの端末のメモが新しいか」を項目単位で判定する（noteNames の再生成など、
+      // note 自体の変更を伴わない間接的な更新ではここを通らないため noteAt は動かない）
+      item.noteAt = Date.now();
     }
     item.note = newNote;
     saveState();
@@ -1990,6 +1995,9 @@ function addItemFromForm() {
     actualLat: null,
     actualLon: null,
     actualAt: null,
+    // メモの端末間マージ（23追記）: 追加フォームでメモを入力済みで作成した場合も「メモの入力」
+    // として扱い、noteAt を記録する（この端末で今しがた書いたメモとして他端末とのマージ判定に使える）
+    noteAt: note ? Date.now() : null,
     lat: null,
     lon: null,
     coordSrc: null,
