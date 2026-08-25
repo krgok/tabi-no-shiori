@@ -25,7 +25,8 @@ const TEST_FILES = [
   "privtest.js",
   "test-copy-fixedstart.js",
   "test-actual.js",
-  "test-note-merge.js"
+  "test-note-merge.js",
+  "test-geocode-sanity.js"
 ];
 
 let overallFail = false;

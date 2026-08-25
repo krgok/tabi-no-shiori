@@ -13,7 +13,7 @@
  * ========================================================= */
 // ⚙️設定モーダルに表示する版数（サポート時に「更新が端末に届いたか」を確認する手掛かり）。
 // sw.js の CACHE_VERSION と常に同じ値にすること。一致は tests/test-pwa.js がCIで検知する
-var APP_VERSION = "v8";
+var APP_VERSION = "v9";
 var STORAGE_KEY_V1 = "tabi-shiori-v1";
 var STORAGE_KEY = "tabi-shiori-v2"; // v2: { currentId, trips: [{ id, data: <trip> }] }（複数しおりの管理 9）
 var GEO_CACHE_KEY = "tabi-geo-cache";
@@ -22,6 +22,13 @@ var MAP_OPEN_KEY = "tabi-map-open";
 var PREP_SIZE_KEY = "tabi-prep-size";
 var NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 var GEOCODE_MIN_INTERVAL_MS = 1100;
+// スポット位置解決の妥当性ガード（6d 追記）: Nominatim が漢字の固有名詞などで無関係な
+// 国・地域の低品質マッチ（importance が極端に低いもの）を返すことがあるため、しおり内の
+// 参照座標から遠すぎる結果は不採用にする。「1日で移動しうる距離の上限」を表す値ではなく、
+// あくまで「別の国・地域への誤マッチを弾くための緩い網」として大きめに取ってある。
+// 飛行機移動の日でも出発地・到着地それぞれの周辺に参照座標があることが多く、
+// いずれか一方に近ければ合格とするため誤検知しにくい
+var GEOCODE_SANITY_MAX_KM = 300;
 var MAP_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 var MAP_DEFAULT_CENTER = [36.5, 138];
 var MAP_DEFAULT_ZOOM = 5;
