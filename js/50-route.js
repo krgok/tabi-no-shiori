@@ -299,10 +299,38 @@ function translateText(text, apiKey, targetLang) {
     });
 }
 
+// スポット位置解決の妥当性ガード（6d 追記）用: しおり内（全日）で既に座標が分かっている
+// 全項目（gmap由来・解決済みのどちらも含む）の座標一覧を集める。stop 自身は除く。
+// 空配列（参照座標なし）と非空配列（参照座標あり）を区別できるようそのまま返す
+function collectReferenceCoords(stop) {
+  var coords = [];
+  trip.days.forEach(function (day) {
+    day.items.forEach(function (it) {
+      if (it === stop) return;
+      if (typeof it.lat === "number" && typeof it.lon === "number") {
+        coords.push({ lat: it.lat, lon: it.lon });
+      }
+    });
+  });
+  return coords;
+}
+
+// 解決結果（coord）が参照座標（refCoords）のいずれか1つからでも GEOCODE_SANITY_MAX_KM 以内なら
+// 合格とする（飛行機移動で出発地・到着地が離れていても、近い方の参照に合致すればよい）。
+// 参照座標が1つも無い場合は判定材料が無いため無条件で合格とする（従来通り採用）
+function isNearAnyReference(coord, refCoords) {
+  if (!refCoords || refCoords.length === 0) return true;
+  return refCoords.some(function (ref) {
+    return haversineKm(coord.lat, coord.lon, ref.lat, ref.lon) <= GEOCODE_SANITY_MAX_KM;
+  });
+}
+
 // スポット位置解決の統一チェーン本体。
 // 1. 既に座標を持つ（gmap 由来含む）→ そのまま使う
-// 2. Nominatim（geocode。キャッシュ・レート制限は既存のまま）
-// 3. APIキーがあれば Google Places API (New) Text Search（成功時のみ tabi-geo-cache にキャッシュ）
+// 2. Nominatim（geocode。キャッシュ・レート制限は既存のまま）。採用前に妥当性ガードを通す
+//    （しおり内に参照座標が1つ以上あり、かつ結果がそのすべてから300km超離れている場合は不採用）
+// 3. APIキーがあれば Google Places API (New) Text Search（成功時のみ tabi-geo-cache にキャッシュ）。
+//    locationBias があり品質が高いため妥当性ガードは適用しない
 // 成功時は stop.lat/lon/coordSrc を直接更新する（呼び出し元での再代入は不要）
 function resolveStopCoords(stop, day) {
   if (typeof stop.lat === "number" && typeof stop.lon === "number") {
@@ -324,8 +352,13 @@ function resolveStopCoords(stop, day) {
     return Promise.resolve(cachedPlace);
   }
 
+  // geocode() のキャッシュ（クエリ→結果）自体には手を入れず、妥当性はここ（採用判定側）で見る。
+  // 誤マッチをキャッシュに残しても実害は無く（次回もこのガードで弾かれる）、
+  // 正しいクエリ→結果の対応関係は保たれる
+  var refCoords = collectReferenceCoords(stop);
+
   return geocode(query).then(function (geoResult) {
-    if (geoResult) {
+    if (geoResult && isNearAnyReference(geoResult, refCoords)) {
       stop.lat = geoResult.lat;
       stop.lon = geoResult.lon;
       stop.coordSrc = "geo";
@@ -1127,6 +1160,22 @@ function runMapUpdate() {
   abortNameFetch();
   resetPlacesApiErrorFlag();
   var day = trip.days[currentDayIndex];
+
+  // 保存済みの誤った座標の自己修復（6d 追記）: coordSrc "geo"（Nominatim/Places解決由来）の
+  // 既存座標にも resolveStopCoords と同じ妥当性判定を適用し、不合格なら座標を捨てて
+  // 下の targets に含め再解決させる。coordSrc "gmap"（ユーザーが貼ったリンク由来）は
+  // 判定対象外で絶対に触らない
+  day.items.forEach(function (it) {
+    if (it.cat === "move" || it.coordSrc !== "geo") return;
+    if (typeof it.lat !== "number" || typeof it.lon !== "number") return;
+    var refCoords = collectReferenceCoords(it);
+    if (!isNearAnyReference({ lat: it.lat, lon: it.lon }, refCoords)) {
+      it.lat = null;
+      it.lon = null;
+      it.coordSrc = null;
+    }
+  });
+
   var targets = day.items.filter(function (it) {
     return it.cat !== "move" && it.coordSrc !== "gmap" && (it.lat == null || it.lon == null) && (it.loc || it.name);
   });

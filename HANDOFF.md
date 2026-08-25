@@ -146,6 +146,7 @@ UI上は `#d=` と `#p=` を「共有」に統合済み（ログイン有無で�
 さらにその後、実績記録の端末間同期バグを修正（`actualAt` を追加し、`mergeTripActuals` で項目単位マージ。SPEC 23参照。CACHE_VERSION は v5 に更新済み）。
 さらにその後、上記マージ修正が「クラウド採用方向」にしか効いておらず、「ローカルをアップロードする方向」では実績が丸ごと消え得た残課題を修正（`computeTripsMergePlan` の `uploads` を `{entry, cloudDoc}` にし、アップロード前にも `mergeTripActuals` を適用。SPEC 23参照。CACHE_VERSION は v7 に更新済み）。
 さらにその後、実績と同じ原因（丸ごと最後の書き込み優先）で項目のメモ（note）も端末間同期で消える不具合を修正（`noteAt` を追加し、`mergeTripActuals`/`mergeDayItems` に note/noteAt の組を項目単位でマージ。notePriv保護は維持。SPEC 23参照。CACHE_VERSION/APP_VERSION は v8 に更新済み）。
+さらにその後、Nominatim が漢字の固有名詞で無関係な国の低品質マッチを返し地図に誤ったピンが立つ不具合を修正（`resolveStopCoords` に参照座標からの妥当性ガード（300km）を追加、`runMapUpdate` で `coordSrc:"geo"` の既存座標も自己修復。gmap由来は不可侵。SPEC 6d参照。CACHE_VERSION/APP_VERSION は v9 に更新済み）。
 
 ---
 
