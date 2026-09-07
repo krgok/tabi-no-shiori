@@ -163,6 +163,9 @@ function switchTrip(id) {
   closeModal(el.tripsModal);
   render();
   syncEditListenerForCurrentTrip();
+  // 到着の自動提案（実績記録フェーズ2 23b）: しおりを切り替えたら、直前のしおりの項目を指している
+  // バナーは意味が無くなるため閉じる
+  hideArrivalPrompt();
 }
 
 // しおりを丸ごと複製する（前回の旅行をテンプレートに次を作る用途）。
@@ -370,6 +373,8 @@ function fromBase64Url(b64url) {
 
 function openSettingsModal() {
   el.settingsApiKeyInput.value = getGmapsKey();
+  // 到着の自動提案（実績記録フェーズ2 23b）: 開くたびに現在の設定値を反映する
+  if (el.settingsArrivalPromptToggle) el.settingsArrivalPromptToggle.checked = isArrivalPromptEnabled();
   openModal(el.settingsModal);
 }
 

@@ -186,6 +186,35 @@ function setGmapsKey(key) {
   }
 }
 
+// 到着の自動提案（実績記録フェーズ2 23b）: 設定のON/OFF。値が明示的に"0"のときだけOFF、それ以外は既定ON
+// （未設定＝初めて開いた端末でも自動提案が効くようにするため）
+function isArrivalPromptEnabled() {
+  try {
+    return localStorage.getItem(ARRIVAL_PROMPT_ENABLED_KEY) !== "0";
+  } catch (e) {
+    return true;
+  }
+}
+
+function setArrivalPromptEnabled(enabled) {
+  try {
+    localStorage.setItem(ARRIVAL_PROMPT_ENABLED_KEY, enabled ? "1" : "0");
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+// 到着の自動提案（23b）: permissions API が使えない環境（古いSafari等）向けのフォールバック判定。
+// ✓ボタンでのgetCurrentPosition成功時にrecordActualStartがこのフラグを立てる（勝手に許可ダイアログを
+// 出さないための多層防御。詳細は maybePromptArrival のコメント参照）
+function isGeoGrantedFallback() {
+  try {
+    return localStorage.getItem(GEO_GRANTED_KEY) === "1";
+  } catch (e) {
+    return false;
+  }
+}
+
 function getRoutesCache() {
   try {
     var raw = localStorage.getItem(ROUTES_CACHE_KEY);

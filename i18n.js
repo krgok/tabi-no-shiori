@@ -264,7 +264,17 @@
       "collab.badge": "✏️ 共同編集中",
       "collab.backToMine": "自分のしおりに戻る",
       "collab.notFound": "このリンクは無効です",
-      "collab.revoked": "オーナーがこの編集リンクを停止しました"
+      "collab.revoked": "オーナーがこの編集リンクを停止しました",
+      "sync.nowDone": "同期しました",
+      "sync.nowButtonAria": "今すぐ同期",
+      "timeline.notFoundShortLinkHint": "※短縮リンク（maps.app.goo.gl）からは位置を取り出せません。Googleマップで場所を開き、アドレスバーのURL（@緯度,経度 を含む）を貼ると確実です",
+      "timeline.actualRecordedBtnTitle": "記録済み（押すと時刻を修正）",
+      "timeline.arrivalPromptText": "「{name}」の近くにいます。到着を記録しますか？",
+      "timeline.arrivalPromptRecord": "記録する",
+      "timeline.arrivalPromptLater": "あとで",
+      "settings.arrivalPrompt": "予定地点の近くに来たら到着の記録を提案する（位置情報を許可済みの場合のみ）",
+      "timeline.daySummary": "実績 {recorded}/{total}件 ・ 最新のずれ {latest} ・ 最大の遅れ {worst}（{worstName}）",
+      "timeline.daySummaryNoLate": "実績 {recorded}/{total}件 ・ 最新のずれ {latest}"
     },
     en: {
       "header.share": "Share",
@@ -472,7 +482,17 @@
       "collab.badge": "✏️ Co-editing",
       "collab.backToMine": "Back to my itinerary",
       "collab.notFound": "This link is no longer valid",
-      "collab.revoked": "The owner turned off this editable link"
+      "collab.revoked": "The owner turned off this editable link",
+      "sync.nowDone": "Synced",
+      "sync.nowButtonAria": "Sync now",
+      "timeline.notFoundShortLinkHint": "* A shortened link (maps.app.goo.gl) doesn't contain a location. Open the place in Google Maps and paste the address-bar URL (with @lat,lon) instead for reliable results.",
+      "timeline.actualRecordedBtnTitle": "Recorded (tap to edit)",
+      "timeline.arrivalPromptText": "You're near \"{name}\". Record your arrival?",
+      "timeline.arrivalPromptRecord": "Record",
+      "timeline.arrivalPromptLater": "Later",
+      "settings.arrivalPrompt": "Suggest recording arrival when near a planned spot (only if location access is already granted)",
+      "timeline.daySummary": "{recorded}/{total} recorded · latest diff {latest} · biggest delay {worst} ({worstName})",
+      "timeline.daySummaryNoLate": "{recorded}/{total} recorded · latest diff {latest}"
     },
     zh: {
       "header.share": "分享",
@@ -680,7 +700,17 @@
       "collab.badge": "✏️ 协作编辑中",
       "collab.backToMine": "返回我的行程",
       "collab.notFound": "此链接已失效",
-      "collab.revoked": "所有者已停用此编辑链接"
+      "collab.revoked": "所有者已停用此编辑链接",
+      "sync.nowDone": "已同步",
+      "sync.nowButtonAria": "立即同步",
+      "timeline.notFoundShortLinkHint": "※短链接（maps.app.goo.gl）无法提取位置信息。请在Google地图中打开该地点，粘贴地址栏中的URL（包含@纬度,经度）会更可靠",
+      "timeline.actualRecordedBtnTitle": "已记录（点击可修改）",
+      "timeline.arrivalPromptText": "您已靠近“{name}”，要记录到达时间吗？",
+      "timeline.arrivalPromptRecord": "记录",
+      "timeline.arrivalPromptLater": "稍后",
+      "settings.arrivalPrompt": "靠近预定地点时提示记录到达（仅在已授权定位时生效）",
+      "timeline.daySummary": "已记录 {recorded}/{total} 项 ・ 最新偏差 {latest} ・ 最大延迟 {worst}（{worstName}）",
+      "timeline.daySummaryNoLate": "已记录 {recorded}/{total} 项 ・ 最新偏差 {latest}"
     },
     th: {
       "header.share": "แชร์",
@@ -888,7 +918,17 @@
       "collab.badge": "✏️ กำลังแก้ไขร่วมกัน",
       "collab.backToMine": "กลับไปที่ทริปของฉัน",
       "collab.notFound": "ลิงก์นี้ไม่ถูกต้องแล้ว",
-      "collab.revoked": "เจ้าของได้ปิดใช้งานลิงก์แก้ไขนี้แล้ว"
+      "collab.revoked": "เจ้าของได้ปิดใช้งานลิงก์แก้ไขนี้แล้ว",
+      "sync.nowDone": "ซิงค์แล้ว",
+      "sync.nowButtonAria": "ซิงค์ตอนนี้",
+      "timeline.notFoundShortLinkHint": "※ลิงก์แบบย่อ (maps.app.goo.gl) ไม่มีข้อมูลตำแหน่งอยู่ในลิงก์ ให้เปิดสถานที่ใน Google Maps แล้ววาง URL จากแถบที่อยู่ (ที่มี @ละติจูด,ลองจิจูด) แทน จะได้ผลลัพธ์ที่แม่นยำกว่า",
+      "timeline.actualRecordedBtnTitle": "บันทึกแล้ว (แตะเพื่อแก้ไข)",
+      "timeline.arrivalPromptText": "คุณอยู่ใกล้ \"{name}\" ต้องการบันทึกเวลาถึงหรือไม่?",
+      "timeline.arrivalPromptRecord": "บันทึก",
+      "timeline.arrivalPromptLater": "ไว้ทีหลัง",
+      "settings.arrivalPrompt": "แนะนำให้บันทึกเวลาถึงเมื่ออยู่ใกล้จุดหมายที่วางแผนไว้ (เฉพาะเมื่ออนุญาตตำแหน่งแล้ว)",
+      "timeline.daySummary": "บันทึกแล้ว {recorded}/{total} รายการ ・ ความคลาดเคลื่อนล่าสุด {latest} ・ ล่าช้าสุด {worst} ({worstName})",
+      "timeline.daySummaryNoLate": "บันทึกแล้ว {recorded}/{total} รายการ ・ ความคลาดเคลื่อนล่าสุด {latest}"
     }
   };
 

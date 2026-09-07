@@ -32,6 +32,8 @@
         <div class="trip-sub-row">
           <div id="tripCountdown" class="trip-countdown hidden"></div>
           <div id="syncStatus" class="sync-status hidden"></div>
+          <!-- 今すぐ同期（新機能）: 表示条件はrenderSyncStatus()と同じ（ログイン済み・firebaseReady・viewOnlyでない・collabModeでない） -->
+          <button type="button" id="syncNowBtn" class="sync-now-btn hidden" data-i18n-aria="sync.nowButtonAria" aria-label="今すぐ同期" title="今すぐ同期">🔄</button>
         </div>
       </div>
       <div class="header-actions">
@@ -289,6 +291,13 @@
         <input type="file" id="settingsRestoreInput" accept=".json,application/json" class="hidden">
       </div>
     </div>
+    <!-- 到着の自動提案（実績記録フェーズ2 23b） -->
+    <div class="settings-arrival-section">
+      <label class="share-public-toggle-row">
+        <input type="checkbox" id="settingsArrivalPrompt">
+        <span data-i18n="settings.arrivalPrompt">予定地点の近くに来たら到着の記録を提案する（位置情報を許可済みの場合のみ）</span>
+      </label>
+    </div>
     <p id="settingsVersion" class="settings-version"></p>
   </div>
 </div>
@@ -388,6 +397,16 @@
   </div>
 </div>
 
+
+<!-- 到着の自動提案（実績記録フェーズ2 23b）: 前面復帰時に近くの予定地点を検知したときだけ表示する。
+     文言はJS側(maybePromptArrival/showArrivalPrompt)が動的に組み立てる（{name}の埋め込みのため） -->
+<div id="arrivalPrompt" class="arrival-prompt hidden">
+  <span id="arrivalPromptText" class="arrival-prompt-text"></span>
+  <div class="arrival-prompt-actions">
+    <button type="button" id="arrivalPromptRecordBtn" class="btn btn-primary" data-i18n="timeline.arrivalPromptRecord">記録する</button>
+    <button type="button" id="arrivalPromptLaterBtn" class="btn btn-outline" data-i18n="timeline.arrivalPromptLater">あとで</button>
+  </div>
+</div>
 
 <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 

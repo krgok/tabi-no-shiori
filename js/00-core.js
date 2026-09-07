@@ -13,7 +13,7 @@
  * ========================================================= */
 // ⚙️設定モーダルに表示する版数（サポート時に「更新が端末に届いたか」を確認する手掛かり）。
 // sw.js の CACHE_VERSION と常に同じ値にすること。一致は tests/test-pwa.js がCIで検知する
-var APP_VERSION = "v9";
+var APP_VERSION = "v10";
 var STORAGE_KEY_V1 = "tabi-shiori-v1";
 var STORAGE_KEY = "tabi-shiori-v2"; // v2: { currentId, trips: [{ id, data: <trip> }] }（複数しおりの管理 9）
 var GEO_CACHE_KEY = "tabi-geo-cache";
@@ -33,6 +33,17 @@ var MAP_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 var MAP_DEFAULT_CENTER = [36.5, 138];
 var MAP_DEFAULT_ZOOM = 5;
 var MAP_LINE_COLOR = "#f2749a";
+
+// 到着の自動提案（実績記録フェーズ2 23b）: アプリを開いた/前面に戻した瞬間に1回だけ現在地を確認し、
+// 予定地点の近くにいれば到着記録を提案する。常時追跡はPWAの制約上できないため（23参照）、
+// この間隔より短い間隔では再チェックしない（連打・頻繁な前面復帰での過剰な位置取得を防ぐ）
+var ARRIVAL_PROMPT_RADIUS_M = 300;
+var ARRIVAL_PROMPT_MIN_INTERVAL_MS = 5 * 60 * 1000;
+// 設定のON/OFF（既定ON）。位置情報の許可自体は別途 navigator.permissions / GEO_GRANTED_KEY で判定する
+var ARRIVAL_PROMPT_ENABLED_KEY = "tabi-shiori-arrival-prompt";
+// permissions API が使えない環境（古いSafari等）向けのフォールバック判定用。
+// ✓ボタンでのgetCurrentPosition成功時にrecordActualStartが"1"を保存する
+var GEO_GRANTED_KEY = "tabi-shiori-geo-granted";
 
 // Google Routes API 連携
 var GMAPS_KEY_STORAGE = "tabi-gmaps-key";
@@ -69,6 +80,9 @@ var CLOUD_EDIT_TRIPS_COLLECTION = "editTrips";
 // ルールの200KB制限（data.size() < 200000）に対し余裕を持たせた閾値。UTF-8バイト長で判定する
 var EDIT_TRIP_MAX_BYTES = 190000;
 var CLOUD_SYNC_DEBOUNCE_MS = 2000;
+// 今すぐ同期（🔄ボタン・前面復帰/オンライン復帰時の自動同期）: 自動同期は連打防止のため、
+// 前回の自動実行からこの間隔が経つまでは何もしない。手動ボタン（syncNow）にはこの間隔制限を掛けない
+var AUTO_SYNC_MIN_INTERVAL_MS = 30000;
 // 手段セレクトの値 -> Routes API travelMode（plane/other はAPI照会対象外）
 var MODE_TO_API_TRAVELMODE = {
   walk: "WALK",
@@ -116,6 +130,17 @@ var fixedStartEditingId = null;
 // 実績記録（フェーズ1）: fixedStartEditingId と同じ理由・同じ運用（タイムラインで
 // <input type="time"> をインライン編集中の項目id。render() をまたいで保持する必要があるためUI一時状態として持つ）
 var actualStartEditingId = null;
+// 実績記録UX改善（フェーズ2 23）: ✓ボタンから実績の編集モードを開くとき、入力欄に入れておく初期値。
+// null なら editor 側は item.actualStart（既存値）をそのまま使う。過去日の項目に✓を押したときだけ
+// 「今」ではなく予定開始時刻をプリセットするために使う一時状態（render()をまたいで保持する必要があるため
+// actualStartEditingId と同じ扱いでここに置く）。編集モードを閉じたら必ずnullへ戻す
+var actualStartEditPreset = null;
+// 到着の自動提案（フェーズ2 23b）: 前回の自動チェック実行時刻・セッション内で「あとで」を押した項目id。
+// dismissedはタブを閉じれば忘れてよい一時的な状態のため永続化しない
+var lastArrivalPromptAt = 0;
+var arrivalPromptDismissedIds = {};
+// 到着の自動提案（23b）: 現在バナーに表示中の候補（{item, coords}）。record/laterボタンのハンドラが参照する
+var currentArrivalCandidate = null;
 var dragState = null;
 // 持ち物・やることリストの並べ替え（10 拡張）: タイムラインのドラッグ（dragState）とは
 // 別のDOMサブツリー・別の対象配列（trip.packing/trip.todos）を扱うため、状態も分けて持つ
@@ -133,6 +158,9 @@ var authUser = null; // 未ログインは null。ログイン時は { uid, emai
 var cloudSyncTimer = null;
 var cloudSyncErrorShown = false; // 書き込みエラーのトーストは連続失敗時に1回だけ出す
 var cloudMergeInProgress = false;
+// 今すぐ同期（🔄ボタン・前面復帰/オンライン復帰時の自動同期）: 自動同期を最後に実行した時刻
+// （手動ボタンのクリックは含まない）。AUTO_SYNC_MIN_INTERVAL_MS 以内の連続実行を防ぐために使う
+var lastAutoSyncAt = 0;
 // trips への add（cloudId 採番）実行中のエントリ: entry.id -> Promise。
 // 採番の完了を待たずに同じエントリを再度書き込むと add が二重に走り、
 // クラウド上にしおりが重複作成されてしまうため、実行中は後続の書き込みを待たせる
@@ -256,6 +284,14 @@ function normalizeDateStr(v) {
   var d = parseInt(m[3], 10);
   if (isNaN(y) || isNaN(mo) || isNaN(d) || mo < 1 || mo > 12 || d < 1 || d > 31) return s;
   return y + "-" + pad2(mo) + "-" + pad2(d);
+}
+
+// 端末のローカル日付を "YYYY-MM-DD" で返す。day.date（旅程側の日付）との一致判定に使う
+// （実績記録UX改善 23: ✓ボタンの「今日か過去日か」判定、到着の自動提案の「今日の日程」判定）。
+// UTCではなくローカル時刻の年月日を使う: day.date はユーザーが現地感覚で入力した日付のため
+function todayLocalDateStr() {
+  var d = new Date();
+  return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
 }
 
 function sleep(ms) {
