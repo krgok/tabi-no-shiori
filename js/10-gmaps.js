@@ -72,10 +72,61 @@ function extractGmapPlaceName(rawUrl) {
   return seg || null;
 }
 
+// 携帯のGoogleマップアプリで場所を共有すると短縮リンク(maps.app.goo.gl)しか得られず、
+// ブラウザ単体では展開できない(CORS)。一方、地図を長押しして「ピンを立てる」と画面上部に
+// 「35.6812, 139.7671」のような座標そのものが表示されコピーできるため、それをそのまま
+// 場所リンク欄に貼れば位置が確定するようにする。ここでは文字列全体が「緯度,経度」または
+// geo: URI（区切りはカンマ・空白・全角カンマ「，」「、」、前後空白可）の形かどうかだけを判定する
+// 純粋関数。それ以外（URLを含む）は null を返す
+function parseBareCoords(str) {
+  var s = (str || "").trim();
+  if (!s) return null;
+  if (isSafeHttpUrl(s)) return null;
+
+  var geoMatch = /^geo:(-?\d+(?:\.\d+)?)[\s,，、]+(-?\d+(?:\.\d+)?)/i.exec(s);
+  if (geoMatch) {
+    var glat = parseFloat(geoMatch[1]);
+    var glon = parseFloat(geoMatch[2]);
+    return isValidLatLon(glat, glon) ? { lat: glat, lon: glon } : null;
+  }
+
+  var m = /^(-?\d+(?:\.\d+)?)[\s,，、]+(-?\d+(?:\.\d+)?)$/.exec(s);
+  if (!m) return null;
+  var lat = parseFloat(m[1]);
+  var lon = parseFloat(m[2]);
+  return isValidLatLon(lat, lon) ? { lat: lat, lon: lon } : null;
+}
+
 function handleGmapChange(item, rawValue) {
   if (viewOnly) return;
   var value = (rawValue || "").trim();
   var prevGmap = item.gmap || "";
+
+  // 「緯度,経度」形式がそのまま貼られた場合は、URLとしてではなく座標として確定させる。
+  // gmap 欄には正規のURL(q=形式)を保存し直す(🔗ボタンで開けるように)。coordSrc="gmap" にして
+  // 手入力の確定座標として扱う(SPEC 6dの「gmap由来は不可侵」と同じ扱いで、地図更新の自己修復対象外にする)
+  if (value) {
+    var bareCoords = parseBareCoords(value);
+    if (bareCoords) {
+      var canonicalGmap = "https://www.google.com/maps?q=" + bareCoords.lat + "," + bareCoords.lon;
+      if (canonicalGmap === prevGmap) {
+        // 同じ座標を貼り直しただけ: 上で item.gmap に入れた生文字列を元の正規URLに戻し、表示も揃える
+        item.gmap = prevGmap;
+        render();
+        return;
+      }
+      item.gmap = canonicalGmap;
+      item.gmapAuto = false;
+      item.lat = bareCoords.lat;
+      item.lon = bareCoords.lon;
+      item.coordSrc = "gmap";
+      saveState();
+      showToast(t("toast.gmapCoordsPasted"));
+      render();
+      return;
+    }
+  }
+
   if (value === prevGmap) return;
   item.gmap = value;
   // 手動で gmap 欄を編集したので、自動入力フラグ（地図更新ボタン由来）は解除する

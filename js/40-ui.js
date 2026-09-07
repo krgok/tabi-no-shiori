@@ -1353,6 +1353,23 @@ function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
     gmapInput.readOnly = viewOnly; // 公開URL閲覧（16）
     gmapRow.appendChild(gmapInput);
 
+    // 場所リンクの一発削除ボタン。リンクが入っていて、かつ編集可能なときだけ出す
+    if (item.gmap && !viewOnly) {
+      var gmapClearBtn = document.createElement("button");
+      gmapClearBtn.type = "button";
+      gmapClearBtn.className = "item-gmap-clear-btn";
+      gmapClearBtn.textContent = "×";
+      gmapClearBtn.title = t("timeline.gmapClearAria");
+      gmapClearBtn.setAttribute("aria-label", t("timeline.gmapClearAria"));
+      gmapClearBtn.addEventListener("click", function () {
+        if (viewOnly) return;
+        // 座標のクリアやトーストは handleGmapChange 側の既存処理に任せ、ここでは二重に書かない
+        handleGmapChange(item, "");
+        showToast(t("toast.gmapCleared"));
+      });
+      gmapRow.appendChild(gmapClearBtn);
+    }
+
     body.appendChild(gmapRow);
   }
 

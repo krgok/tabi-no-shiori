@@ -1131,6 +1131,35 @@ select {
   color: var(--ink);
 }
 
+/* 場所リンクの一発削除ボタン。見た目・タップ判定は .item-actual-clear-btn に揃える */
+.item-gmap-clear-btn {
+  flex: none;
+  font-size: 0.72rem;
+  line-height: 1;
+  color: var(--ink-soft);
+  background: none;
+  border: none;
+  padding: 2px;
+  border-radius: 999px;
+  cursor: pointer;
+  position: relative;
+}
+
+.item-gmap-clear-btn::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 30px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+}
+
+.item-gmap-clear-btn:hover {
+  color: var(--warn);
+  background: rgba(0, 0, 0, 0.06);
+}
+
 .item-note-row {
   display: flex;
   align-items: flex-start;
