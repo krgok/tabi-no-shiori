@@ -940,6 +940,10 @@ function runRouteCalculation(dayIndex) {
   var originalLabel = el.routeBtnLabel.textContent;
 
   var notFound = [];
+  // 短縮リンクの案内（新機能）: 解決できなかった項目のうち、gmap欄が短縮リンク（isShortGmapLink、
+  // js/10-gmaps.js）であるものが1つでもあれば、原因（短縮リンクには座標が含まれず、名前検索も
+  // 通らなかった）に応じた案内をトースト末尾に付け足す
+  var notFoundHasShortLink = false;
   var insertions = [];
   var items = day.items;
   var apiKey = getGmapsKey();
@@ -993,8 +997,14 @@ function runRouteCalculation(dayIndex) {
 
       // resolveStopCoords が成功した場合、pair.a/pair.b の lat/lon/coordSrc は既に更新済み。
       // 元々座標を持っていなかったのに解決できなかった場合のみ notFound に積む
-      if (!hadCoordsA && !geoA) notFound.push(queryA);
-      if (!hadCoordsB && !geoB) notFound.push(queryB);
+      if (!hadCoordsA && !geoA) {
+        notFound.push(queryA);
+        if (isShortGmapLink(pair.a.gmap)) notFoundHasShortLink = true;
+      }
+      if (!hadCoordsB && !geoB) {
+        notFound.push(queryB);
+        if (isShortGmapLink(pair.b.gmap)) notFoundHasShortLink = true;
+      }
 
       // 場所を解決できないスポットの近隣アンカー概算:
       // ジオコーディングに失敗した側は、同じ日の直前（無ければ直後）の解決済みスポットの
@@ -1119,7 +1129,10 @@ function runRouteCalculation(dayIndex) {
 
       var uniqueNotFound = uniq(notFound);
       if (uniqueNotFound.length > 0) {
-        showToast(t("timeline.notFound", { list: uniqueNotFound.join(", ") }), "error");
+        var msg = t("timeline.notFound", { list: uniqueNotFound.join(", ") });
+        // 短縮リンクの案内（新機能）: 原因が短縮リンクの可能性がある場合のみ、対処法を末尾に付け足す
+        if (notFoundHasShortLink) msg += "\n" + t("timeline.notFoundShortLinkHint");
+        showToast(msg, "error");
       } else {
         showToast(t("timeline.routeDone"));
       }
@@ -1196,6 +1209,8 @@ function runMapUpdate() {
   var originalLabel = el.mapUpdateBtnLabel.textContent;
 
   var notFound = [];
+  // 短縮リンクの案内（新機能）: runRouteCalculation と同じ判定（isShortGmapLink、js/10-gmaps.js）
+  var notFoundHasShortLink = false;
   var chain = Promise.resolve();
   targets.forEach(function (item, index) {
     chain = chain.then(function () {
@@ -1203,7 +1218,10 @@ function runMapUpdate() {
       var query = item.loc || item.name;
       // 位置解決は resolveStopCoords（6d の統一チェーン: 既存座標 → Nominatim → Places API (New)）に任せる
       return resolveStopCoords(item, day).then(function (result) {
-        if (!result) notFound.push(query);
+        if (!result) {
+          notFound.push(query);
+          if (isShortGmapLink(item.gmap)) notFoundHasShortLink = true;
+        }
       });
     });
   });
@@ -1216,7 +1234,10 @@ function runMapUpdate() {
 
       var uniqueNotFound = uniq(notFound);
       if (uniqueNotFound.length > 0) {
-        showToast(t("timeline.notFound", { list: uniqueNotFound.join(", ") }), "error");
+        var msg = t("timeline.notFound", { list: uniqueNotFound.join(", ") });
+        // 短縮リンクの案内（新機能）: 原因が短縮リンクの可能性がある場合のみ、対処法を末尾に付け足す
+        if (notFoundHasShortLink) msg += "\n" + t("timeline.notFoundShortLinkHint");
+        showToast(msg, "error");
       } else {
         showToast(t("map.updateDone"));
       }

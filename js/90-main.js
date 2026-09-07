@@ -259,6 +259,31 @@ function bindEvents() {
     logoutFromGoogle();
   });
 
+  // 今すぐ同期（新機能）: cacheDom()（js/40-ui.js）は他の作業者と競合するため触れない制約があり、
+  // ここで直接 el に登録する（renderSyncStatus 側にも多層防御として同じ遅延登録がある）
+  el.syncNowBtn = document.getElementById("syncNowBtn");
+  if (el.syncNowBtn) {
+    el.syncNowBtn.addEventListener("click", function () {
+      syncNow({ silent: false });
+    });
+  }
+  // 前面復帰時・オンライン復帰時の自動同期（静かに実行。連打防止は autoSyncIfDue 内の間隔制限で行う）
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") {
+      autoSyncIfDue();
+      // 到着の自動提案（実績記録フェーズ2 23b）: 前面に戻った瞬間に1回だけ現在地を確認する。
+      // 間隔制限・権限まわりのガードは関数内部で行う
+      maybePromptArrival("visible");
+    } else if (document.visibilityState === "hidden") {
+      // 閉じる直前の未送信データの即時送信（ベストエフォート）
+      flushPendingCloudSync();
+    }
+  });
+  window.addEventListener("online", autoSyncIfDue);
+  // pagehide はタブを閉じる/他ページへ移動する直前にも確実に発火する（visibilitychange の hidden より後）ため、
+  // 二重の安全網として同じ即時送信を仕込む（flushPendingCloudSyncは既に送信済みならタイマーが無く何もしない）
+  window.addEventListener("pagehide", flushPendingCloudSync);
+
   el.settingsBtn.addEventListener("click", openSettingsModal);
   el.settingsSaveBtn.addEventListener("click", function () {
     var key = el.settingsApiKeyInput.value.trim();
@@ -270,6 +295,32 @@ function bindEvents() {
     el.settingsApiKeyInput.value = "";
     showToast(t("settings.deleted"));
   });
+
+  // 到着の自動提案（実績記録フェーズ2 23b）: cacheDom()（js/40-ui.js）は他の作業者と競合するため
+  // 触れない方針（syncNowBtnと同じ理由）。ここで直接 el に登録する
+  el.settingsArrivalPromptToggle = document.getElementById("settingsArrivalPrompt");
+  if (el.settingsArrivalPromptToggle) {
+    el.settingsArrivalPromptToggle.addEventListener("change", function () {
+      setArrivalPromptEnabled(el.settingsArrivalPromptToggle.checked);
+    });
+  }
+  el.arrivalPrompt = document.getElementById("arrivalPrompt");
+  el.arrivalPromptText = document.getElementById("arrivalPromptText");
+  var arrivalPromptRecordBtn = document.getElementById("arrivalPromptRecordBtn");
+  var arrivalPromptLaterBtn = document.getElementById("arrivalPromptLaterBtn");
+  if (arrivalPromptRecordBtn) {
+    arrivalPromptRecordBtn.addEventListener("click", function () {
+      if (!currentArrivalCandidate) return;
+      recordActualStart(currentArrivalCandidate.item.id, currentArrivalCandidate.coords);
+      hideArrivalPrompt();
+    });
+  }
+  if (arrivalPromptLaterBtn) {
+    arrivalPromptLaterBtn.addEventListener("click", function () {
+      if (currentArrivalCandidate) arrivalPromptDismissedIds[currentArrivalCandidate.item.id] = true;
+      hideArrivalPrompt();
+    });
+  }
 
   if (el.settingsBackupBtn) {
     el.settingsBackupBtn.addEventListener("click", backupAllTrips);
@@ -390,6 +441,9 @@ function init() {
   // 編集できる共有リンク（18）: オーナー側は、現在のしおりが editId を持つなら editTrips の購読を開始する。
   // viewOnly / collabMode 中は関数内部のガードで何もしない
   syncEditListenerForCurrentTrip();
+  // 到着の自動提案（実績記録フェーズ2 23b）: 起動直後にも1回だけ現在地を確認する。
+  // viewOnly・設定OFF・権限未許可などのガードは関数内部で行う
+  maybePromptArrival("init");
 
   // 起動時の移行・正規化結果を必ず永続化する（v1→v2移行の直後にリロードされても再移行されないように）
   // viewOnly 中（公開URL閲覧）・collabMode 中（共同編集）は saveState() が no-op のため、

@@ -76,8 +76,14 @@ function setSyncState(kind) {
 
 function renderSyncStatus() {
   if (!el.syncStatus) return;
-  // ログインしていない/クラウド未使用のときは何も出さない（未ログインでも普通に使えるため）
-  if (!authUser || !firebaseReady || viewOnly || collabMode) {
+  // 今すぐ同期ボタン（新機能）: cacheDom()（js/40-ui.js）は他の作業者と競合するため触れない制約があり、
+  // ここで遅延登録する（bindEvents 内でも登録済みだが、多層防御として毎回確認する）
+  if (!el.syncNowBtn) el.syncNowBtn = document.getElementById("syncNowBtn");
+  // ログインしていない/クラウド未使用のときは何も出さない（未ログインでも普通に使えるため）。
+  // 🔄ボタンも同じ条件（renderSyncStatus と同じ表示条件）で出し分ける
+  var showSync = !!(authUser && firebaseReady && !viewOnly && !collabMode);
+  if (el.syncNowBtn) el.syncNowBtn.classList.toggle("hidden", !showSync);
+  if (!showSync) {
     el.syncStatus.classList.add("hidden");
     el.syncStatus.textContent = "";
     return;
@@ -131,6 +137,17 @@ function scheduleCloudSync() {
     cloudSyncTimer = null;
     cloudUpsertEntry(getCurrentEntry());
   }, CLOUD_SYNC_DEBOUNCE_MS);
+}
+
+// 閉じる直前の未送信データの即時送信: デバウンス（scheduleCloudSync の2秒待ち）の途中で
+// アプリを閉じる/他アプリへ切り替えると、そのままでは書き込みが送信されない。
+// visibilitychange(hidden)・pagehide・今すぐ同期（syncNow）から呼び、残っていれば即時実行する。
+// あくまでベストエフォート（cloudUpsertEntry の送信完了・成功はタブが閉じるまでに保証されない）
+function flushPendingCloudSync() {
+  if (!cloudSyncTimer) return;
+  clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = null;
+  cloudUpsertEntry(getCurrentEntry());
 }
 
 // 1件の trips エントリを Firestore に書き込む（新規なら作成して cloudId を採番、既存なら更新）。即時実行。
@@ -567,10 +584,12 @@ function applyCloudMergePlan(plan) {
 // ログイン直後に1回だけ実行する、クラウドとローカルの突き合わせ処理
 // 編集できる共有リンク（18）: collabMode 中はゲスト自身のアカウントの trips には一切触れない
 // （「ログイン/クラウド同期系は collabMode で無効化」）。exitCollabMode() で通常モードに戻った際に再実行する
+// 今すぐ同期（新機能）: 完了を呼び出し元が知れるように Promise を返すようにした。
+// 既存の呼び出し元（handleAuthStateChanged）は戻り値を無視しているだけなので互換性は保たれる
 function runCloudMerge() {
-  if (!firebaseReady || !fbDb || !authUser || cloudMergeInProgress || collabMode) return;
+  if (!firebaseReady || !fbDb || !authUser || cloudMergeInProgress || collabMode) return Promise.resolve();
   cloudMergeInProgress = true;
-  fbDb
+  return fbDb
     .collection(CLOUD_TRIPS_COLLECTION)
     .where("ownerUid", "==", authUser.uid)
     .get()
@@ -590,11 +609,58 @@ function runCloudMerge() {
       var plan = computeTripsMergePlan(tripsStore, cloudDocs);
       applyCloudMergePlan(plan);
       cloudMergeInProgress = false;
+      return true;
     })
     .catch(function (err) {
       cloudMergeInProgress = false;
       handleCloudError(err);
+      // 失敗はここで握りつぶす（エラー表示は handleCloudError 済み）。呼び出し元（syncNow）が
+      // 「成功しました」を誤って出さないよう、成功時の true と区別できる false を返す
+      return false;
     });
+}
+
+/* =========================================================
+ * 今すぐ同期（新機能）
+ * これまで自分のしおり（trips）のクラウド受信は起動時の runCloudMerge()（handleAuthStateChanged 経由）
+ * しか走らず、他端末の変更を見るにはアプリを完全終了→再起動する必要があった。
+ * 🔄ボタン（手動）・前面復帰時/オンライン復帰時（自動、静か）の両方からこの節の関数を呼ぶ。
+ * ========================================================= */
+
+// 🔄ボタン・自動同期で共用する本体。opts.silent=true のときはトーストを出さない（自動同期用）。
+// 閲覧専用（viewOnly）・共同編集中（collabMode）は自分の trips が対象にならないため何もしない
+function syncNow(opts) {
+  opts = opts || {};
+  var silent = !!opts.silent;
+  if (!authUser || !firebaseReady || viewOnly || collabMode) return;
+  if (cloudMergeInProgress) return; // 実行中なら二重実行せず無視（連打・自動同期との重複対策）
+  // デバウンス中の未送信（scheduleCloudSync の2秒待ち）があれば、マージの前に即時反映しておく。
+  // 先に送っておかないと、直後の runCloudMerge がまだクラウドに届いていない古い版を見てしまう
+  flushPendingCloudSync();
+  if (el.syncNowBtn) {
+    el.syncNowBtn.classList.add("is-syncing");
+    el.syncNowBtn.disabled = true;
+  }
+  runCloudMerge().then(function (ok) {
+    if (el.syncNowBtn) {
+      el.syncNowBtn.classList.remove("is-syncing");
+      el.syncNowBtn.disabled = false;
+    }
+    // 失敗時のトーストは runCloudMerge 内の handleCloudError に任せる（ここでは成功時のみ知らせる）。
+    // runCloudMerge は失敗時に false を返す（catch で握りつぶすため、then だけでは成否が分からない）
+    if (!silent && ok !== false) showToast(t("sync.nowDone"));
+  });
+}
+
+// 前面復帰時（visibilitychange→visible）・オンライン復帰時（online）の自動同期。
+// 連打防止として、前回の自動同期から AUTO_SYNC_MIN_INTERVAL_MS 以内なら何もしない
+// （手動の🔄ボタン＝syncNow直接呼び出しにはこの間隔制限を掛けない）
+function autoSyncIfDue() {
+  if (!authUser || !firebaseReady || viewOnly || collabMode) return;
+  var now = Date.now();
+  if (now - lastAutoSyncAt < AUTO_SYNC_MIN_INTERVAL_MS) return;
+  lastAutoSyncAt = now;
+  syncNow({ silent: true });
 }
 
 // ヘッダーの認証ボタン・アカウントモーダルの表示を、現在の authUser / firebaseReady に合わせて更新する

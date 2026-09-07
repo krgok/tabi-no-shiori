@@ -26,7 +26,12 @@ const TEST_FILES = [
   "test-copy-fixedstart.js",
   "test-actual.js",
   "test-note-merge.js",
-  "test-geocode-sanity.js"
+  "test-geocode-sanity.js",
+  "test-sync-now.js",
+  "test-actual-ux.js",
+  "test-asset-hash-logic.js",
+  // 版数上げ忘れ検知（内容ハッシュ）はスナップショット tests/asset-hash.json を書き換えることがあるため最後に回す
+  "test-asset-hash.js"
 ];
 
 let overallFail = false;

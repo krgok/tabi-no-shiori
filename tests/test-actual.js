@@ -7,6 +7,17 @@ const { boot, tick, ok, section, read, results } = require("./harness");
 
 const STORAGE_KEY = "tabi-shiori-v2";
 
+// 実績記録UX改善（フェーズ2 23）: ✓ボタンは「その日が今日かどうか」で挙動を変えるため、
+// フィクスチャの日付は固定値ではなく実行時の「今日」に合わせる（さもないと✓ボタンの
+// 単体クリックが常に「過去日の振り返り入力」経路に落ちてテストの前提が崩れる）
+function todayStr() {
+  var d = new Date();
+  var pad = function (n) {
+    return (n < 10 ? "0" : "") + n;
+  };
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+}
+
 // 差分計算が読み取りやすい単純なフィクスチャ（tz無し・auto move無し）。startTime=09:00、
 // items[0]の予定開始は09:00（dur=60）。実績記録の差分表示テストはこのitems[0]を使う
 function fixtureTrip() {
@@ -17,7 +28,7 @@ function fixtureTrip() {
     lang: "ja",
     days: [
       {
-        date: "2026-08-01",
+        date: todayStr(),
         startTime: "09:00",
         tz: "",
         items: [
@@ -185,7 +196,8 @@ function actualsTrip(days) {
     const envLate = boot({ localStorage: fixtureStore(tripLate) });
     await tick();
     let disp = envLate.doc.querySelector("#timeline .item-card[data-id='a1'] .item-actual-display");
-    ok(disp.textContent === "実績 09:25 (+25分)", "遅れは「実績 HH:MM (+N分)」で表示される", disp.textContent);
+    // 実績記録UX改善（フェーズ2 23）: 修正できることが分かるよう末尾に✏️が付く（viewOnlyでは付かない。6節参照）
+    ok(disp.textContent === "実績 09:25 (+25分) ✏️", "遅れは「実績 HH:MM (+N分) ✏️」で表示される", disp.textContent);
     ok(disp.classList.contains("is-late"), "遅れには is-late クラスが付く");
 
     const tripEarly = fixtureTrip();
@@ -193,7 +205,7 @@ function actualsTrip(days) {
     const envEarly = boot({ localStorage: fixtureStore(tripEarly) });
     await tick();
     disp = envEarly.doc.querySelector("#timeline .item-card[data-id='a1'] .item-actual-display");
-    ok(disp.textContent === "実績 08:50 (-10分)", "早着は「実績 HH:MM (-N分)」で表示される", disp.textContent);
+    ok(disp.textContent === "実績 08:50 (-10分) ✏️", "早着は「実績 HH:MM (-N分) ✏️」で表示される", disp.textContent);
     ok(disp.classList.contains("is-early"), "早着には is-early クラスが付く");
 
     const tripExact = fixtureTrip();
@@ -201,7 +213,7 @@ function actualsTrip(days) {
     const envExact = boot({ localStorage: fixtureStore(tripExact) });
     await tick();
     disp = envExact.doc.querySelector("#timeline .item-card[data-id='a1'] .item-actual-display");
-    ok(disp.textContent === "実績 09:00", "ちょうど予定どおりのときは差分を表示しない", disp.textContent);
+    ok(disp.textContent === "実績 09:00 ✏️", "ちょうど予定どおりのときは差分を表示しない（✏️は付く）", disp.textContent);
     ok(!disp.classList.contains("is-late") && !disp.classList.contains("is-early"), "ちょうどのときは色クラスも付かない");
   }
 
@@ -230,7 +242,7 @@ function actualsTrip(days) {
     await tick();
     let cardAfterEsc = env.doc.querySelector("#timeline .item-card[data-id='a1']");
     ok(!cardAfterEsc.querySelector(".item-actual-input"), "Escapeで編集モードが閉じる");
-    ok(cardAfterEsc.querySelector(".item-actual-display").textContent === "実績 09:25 (+25分)", "Escapeでは値が保存されず元の実績表示に戻る", cardAfterEsc.querySelector(".item-actual-display").textContent);
+    ok(cardAfterEsc.querySelector(".item-actual-display").textContent === "実績 09:25 (+25分) ✏️", "Escapeでは値が保存されず元の実績表示に戻る", cardAfterEsc.querySelector(".item-actual-display").textContent);
 
     // 改めてクリックして開き直し、今度は change確定で 09:40 に修正する
     cardAfterEsc.querySelector(".item-actual-display").click();
@@ -242,7 +254,7 @@ function actualsTrip(days) {
 
     card = env.doc.querySelector("#timeline .item-card[data-id='a1']");
     const disp2 = card.querySelector(".item-actual-display");
-    ok(disp2.textContent === "実績 09:40 (+40分)", "修正後の値で再表示される", disp2.textContent);
+    ok(disp2.textContent === "実績 09:40 (+40分) ✏️", "修正後の値で再表示される", disp2.textContent);
 
     const saved = JSON.parse(env.store[STORAGE_KEY]);
     const a1 = saved.trips[0].data.days[0].items.find((i) => i.id === "a1");

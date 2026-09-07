@@ -964,6 +964,18 @@ select {
   white-space: nowrap;
 }
 
+/* 1日の振り返りサマリー（実績記録フェーズ2 23c）: 実績が1件以上ある日にだけタイムライン先頭に出す1行。
+   印刷(PDF)は別のDOMツリー(buildPrintDaySection)から組み立てるため、ここに置くだけで自然に印刷対象外になる */
+.day-actual-summary {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--color-sight-bg);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-bottom: 10px;
+}
+
 /* 実績記録（フェーズ1）: 「実績 HH:MM (+N分)」の表示行。クリックで手動修正できる */
 .item-actual-row {
   display: flex;
@@ -1220,6 +1232,19 @@ select {
   opacity: 1;
   background: var(--color-sight-bg);
   color: var(--color-sight);
+}
+
+/* 実績記録UX改善（フェーズ2 23）: 記録済み状態。押しても上書きせず修正モードを開くことが
+   見た目からも分かるよう、控えめに塗りつぶした「済み」の見た目にする（警告色は使わない） */
+.item-actual-record-btn.is-recorded {
+  background: var(--color-sight-bg);
+  color: var(--color-sight);
+  opacity: 1;
+}
+
+.item-actual-record-btn.is-recorded:hover {
+  background: var(--color-sight);
+  color: #fff;
 }
 
 /* 非公開マーク（14）: 項目まるごとの 🔓/🔒 トグル。複製・削除ボタンと並べて配置する */
@@ -2189,6 +2214,45 @@ select {
   font-size: 0.85rem;
 }
 
+/* ===================== 到着の自動提案（実績記録フェーズ2 23b） ===================== */
+
+.arrival-prompt {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 205;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: calc(100% - 28px);
+  max-width: 420px;
+  padding: 12px 16px;
+  background: var(--paper);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+}
+
+.arrival-prompt-text {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: center;
+}
+
+.arrival-prompt-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+
+.arrival-prompt-actions .btn {
+  padding: 6px 14px;
+  font-size: 0.8rem;
+}
+
 /* ===================== トースト ===================== */
 
 .toast-container {
@@ -2220,6 +2284,8 @@ select {
   transition: opacity 0.25s ease, transform 0.25s ease;
   max-width: 100%;
   text-align: center;
+  /* 短縮リンクの案内（timeline.notFoundShortLinkHint）など、改行入りの文言をそのまま折り返して表示するため */
+  white-space: pre-line;
 }
 
 /* 「元に戻す」ボタン付きトースト（削除のUndo用） */
@@ -2743,4 +2809,39 @@ body.view-only-mode .item-nudge {
 .sync-status.sync-status-error {
   color: var(--warn);
   opacity: 1;
+}
+
+/* 今すぐ同期ボタン（新機能） */
+.sync-now-btn {
+  border: none;
+  background: none;
+  padding: 2px;
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--ink-soft);
+  opacity: 0.8;
+}
+
+.sync-now-btn:hover {
+  opacity: 1;
+}
+
+.sync-now-btn:disabled {
+  cursor: default;
+}
+
+/* 同期中は軽く回転させ、動作していることが分かるようにする */
+.sync-now-btn.is-syncing {
+  animation: sync-now-spin 1s linear infinite;
+}
+
+@keyframes sync-now-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }

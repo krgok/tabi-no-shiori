@@ -570,6 +570,160 @@ function getItineraryNumberMap(day) {
   return map;
 }
 
+// 1日の振り返りサマリー（実績記録フェーズ2 23c）: その日の実績集計を計算する純粋関数。
+// timedItems は getDayTimedItems(day) の戻り値（{item, startMin, ...}の配列）をそのまま渡す設計にし、
+// タイムラインの時刻計算（日跨ぎの暦日丸め）をここで再実装しなくて済むようにしている。
+// 実績が1件も無ければ null を返す（呼び出し側はサマリー表示自体を省く）
+function computeDayActualSummary(day, timedItems) {
+  var recordedTimed = timedItems.filter(function (timed) {
+    return !!timed.item.actualStart;
+  });
+  if (!recordedTimed.length) return null;
+
+  // 各実績項目の差分(分)。予定開始時刻(startMin)は日跨ぎで1440分を超えうるため、実績表示と同じく
+  // 暦日境界内の時刻に丸めてから比較する
+  var diffs = recordedTimed.map(function (timed) {
+    var scheduledMinOfDay = ((timed.startMin % 1440) + 1440) % 1440;
+    return { item: timed.item, diffMin: parseTimeToMinutes(timed.item.actualStart) - scheduledMinOfDay };
+  });
+
+  // 最新: day.items の並び順（=timedItemsの並び順。filterは順序を保つ）で最後に実績を持つ項目
+  var latest = diffs[diffs.length - 1];
+
+  // 最大の遅れ: 差分が正のものの中で最大のもの。遅れが1件も無ければnull
+  var worst = null;
+  diffs.forEach(function (d) {
+    if (d.diffMin > 0 && (!worst || d.diffMin > worst.diffMin)) worst = d;
+  });
+
+  return {
+    recorded: recordedTimed.length,
+    total: timedItems.length,
+    latestDiffMin: latest.diffMin,
+    worst: worst ? { diffMin: worst.diffMin, name: worst.item.name } : null
+  };
+}
+
+// 上の差分(分)を「+12分」「-5分」「±0分」の表記に整える（実績表示の(+N分)と同じ考え方）
+function formatActualDiffMin(diffMin) {
+  var unit = window.I18N.DURATION_UNITS[lang()];
+  if (diffMin > 0) return "+" + diffMin + unit;
+  if (diffMin < 0) return diffMin + unit; // Number同士の引き算なので符号は既に含まれる
+  return "±0" + unit;
+}
+
+// 1日の振り返りサマリー（23c）のDOM組み立て。実績が無い日はnullを返し、呼び出し側は何も追加しない。
+// viewOnlyでも表示する（実績時刻は非公開情報ではないため。座標などの機微情報は含まない）
+function buildDayActualSummaryEl(day, timedItems) {
+  var summary = computeDayActualSummary(day, timedItems);
+  if (!summary) return null;
+  var el2 = document.createElement("div");
+  el2.className = "day-actual-summary";
+  var vars = {
+    recorded: summary.recorded,
+    total: summary.total,
+    latest: formatActualDiffMin(summary.latestDiffMin)
+  };
+  if (summary.worst) {
+    vars.worst = formatActualDiffMin(summary.worst.diffMin);
+    vars.worstName = summary.worst.name;
+    el2.textContent = t("timeline.daySummary", vars);
+  } else {
+    el2.textContent = t("timeline.daySummaryNoLate", vars);
+  }
+  return el2;
+}
+
+// 到着の自動提案（実績記録フェーズ2 23b）: 今日の日の項目のうち、座標があり・未記録・
+// 「あとで」を押されていないものの中から、現在地に最も近い1件を返す純粋関数（DOMに触れず、
+// テストから直接呼べるようにしてある）。半径(ARRIVAL_PROMPT_RADIUS_M)を超えるものは対象外
+function findArrivalCandidate(tripObj, coords, todayStr) {
+  if (!tripObj || !tripObj.days || !coords) return null;
+  var best = null;
+  tripObj.days.forEach(function (day, dayIndex) {
+    if (!day.date || day.date !== todayStr) return;
+    (day.items || []).forEach(function (item) {
+      if (item.actualStart) return;
+      if (arrivalPromptDismissedIds[item.id]) return;
+      if (typeof item.lat !== "number" || typeof item.lon !== "number") return;
+      var distanceM = haversineKm(coords.lat, coords.lon, item.lat, item.lon) * 1000;
+      if (distanceM > ARRIVAL_PROMPT_RADIUS_M) return;
+      if (!best || distanceM < best.distanceM) {
+        best = { dayIndex: dayIndex, item: item, distanceM: distanceM };
+      }
+    });
+  });
+  return best;
+}
+
+// 到着の自動提案（23b）のバナー表示・非表示。#arrivalPrompt（index.html）を使う
+function showArrivalPrompt(item, coords) {
+  if (!el.arrivalPrompt || !el.arrivalPromptText) return;
+  currentArrivalCandidate = { item: item, coords: coords };
+  el.arrivalPromptText.textContent = t("timeline.arrivalPromptText", { name: item.name });
+  el.arrivalPrompt.classList.remove("hidden");
+}
+
+function hideArrivalPrompt() {
+  if (el.arrivalPrompt) el.arrivalPrompt.classList.add("hidden");
+  currentArrivalCandidate = null;
+}
+
+// 到着の自動提案（23b）の中核。アプリを開いた/前面に戻した瞬間（trigger引数はログ用途で未使用）に
+// 1回だけ現在地を確認し、予定地点の近くにいれば到着記録を提案する。
+// 常時追跡はしない設計（recordActualStartのコメント参照）で、ここでも「その場限りの単発GPS取得」に留める。
+//
+// 権限の扱い（重要）: 勝手に位置情報の許可ダイアログを出さない。
+// - navigator.permissions.query({name:"geolocation"}) が使える環境では、state==="granted" のときだけ
+//   自動取得する（"prompt"/"denied" では何もしない。ここでgetCurrentPositionを呼ぶと、対応環境では
+//   ユーザーの操作なしに許可ダイアログが出てしまうため）
+// - permissions API が無い環境（古いSafari等）では、✓ボタンでのgetCurrentPosition成功実績
+//   （GEO_GRANTED_KEY）がある場合に限り自動取得する（一度も許可されたことが無い端末では黙って諦める）
+function maybePromptArrival(trigger) {
+  if (viewOnly) return;
+  if (!isArrivalPromptEnabled()) return;
+  if (!window.navigator || !navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") return;
+  var now = Date.now();
+  if (now - lastArrivalPromptAt < ARRIVAL_PROMPT_MIN_INTERVAL_MS) return;
+  if (!trip || !trip.days) return;
+  var todayStr = todayLocalDateStr();
+  var hasToday = trip.days.some(function (d) {
+    return d.date === todayStr;
+  });
+  // 今日の日程が無ければ、無駄な位置取得・権限プロンプトを避けるためGPSを呼ばずに終える
+  if (!hasToday) return;
+
+  lastArrivalPromptAt = now;
+
+  function proceedWithGeo() {
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        if (viewOnly || !pos || !pos.coords) return;
+        var coords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        var candidate = findArrivalCandidate(trip, coords, todayLocalDateStr());
+        if (candidate) showArrivalPrompt(candidate.item, coords);
+      },
+      function () {
+        /* 失敗（権限拒否・タイムアウト等）は静かに無視する */
+      },
+      { timeout: 10000, maximumAge: 60000 }
+    );
+  }
+
+  if (navigator.permissions && typeof navigator.permissions.query === "function") {
+    navigator.permissions.query({ name: "geolocation" }).then(
+      function (status) {
+        if (status && status.state === "granted") proceedWithGeo();
+      },
+      function () {
+        /* permissions APIがあるのにqueryが失敗する環境では、フォールバックへは進まず何もしない */
+      }
+    );
+  } else if (isGeoGrantedFallback()) {
+    proceedWithGeo();
+  }
+}
+
 // gmap 手入力が無い項目向けの自動 Google Maps リンクを組み立てる（trip には保存しない）
 function buildAutoGmapUrl(item) {
   if (typeof item.lat === "number" && typeof item.lon === "number") {
@@ -604,7 +758,14 @@ function renderTimeline() {
   }
 
   var numMap = getItineraryNumberMap(day);
-  getDayTimedItems(day).forEach(function (timed, idx) {
+  var timedItems = getDayTimedItems(day);
+
+  // 1日の振り返りサマリー（実績記録フェーズ2 23c）: その日に実績が1件以上あるときだけ、
+  // タイムライン先頭に要約を1行出す。viewOnlyでも表示する（座標を含まない非公開情報ではないため）
+  var daySummaryEl = buildDayActualSummaryEl(day, timedItems);
+  if (daySummaryEl) el.timeline.appendChild(daySummaryEl);
+
+  timedItems.forEach(function (timed, idx) {
     el.timeline.appendChild(buildItemCard(timed.item, timed.startMin, timed.endMin, day, idx, numMap, timed));
   });
 
@@ -759,11 +920,14 @@ function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
     var actualInput = document.createElement("input");
     actualInput.type = "time";
     actualInput.className = "item-actual-input";
-    actualInput.value = item.actualStart || "";
+    // 実績記録UX改善（フェーズ2 23）: 既存値があればそれを、無ければ✓ボタン側が用意したプリセット
+    // （過去日の項目で✓を押したときの予定開始時刻）を初期値にする
+    actualInput.value = item.actualStart || actualStartEditPreset || "";
     actualInput.setAttribute("aria-label", t("timeline.actualInputAria"));
     var closeActualEditor = function (commit) {
       if (actualStartEditingId !== item.id) return; // 既に確定/取消済み（二重発火防止。fixedStartと同じガード）
       actualStartEditingId = null;
+      actualStartEditPreset = null; // 編集モードを閉じたら次回のためにプリセットを必ず消す
       if (commit) {
         item.actualStart = normalizeFixedStart(actualInput.value);
         // 実績の端末間マージ（23追記）: 手動修正のたびに最終更新時刻を記録する
@@ -809,7 +973,9 @@ function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
       actualBtn.classList.add("is-early");
       actualDiffText = " (" + actualDiffMin + window.I18N.DURATION_UNITS[lang()] + ")";
     }
-    actualBtn.textContent = t("timeline.actualLabel") + " " + item.actualStart + actualDiffText;
+    // 実績記録UX改善（フェーズ2 23）: タップで修正できることが一目で分かるよう✏️を添える。
+    // viewOnly（公開URL閲覧）では編集できないため付けない
+    actualBtn.textContent = t("timeline.actualLabel") + " " + item.actualStart + actualDiffText + (viewOnly ? "" : " ✏️");
     actualBtn.title = t("timeline.actualEditHint");
     if (!viewOnly) {
       actualBtn.addEventListener("click", function () {
@@ -1220,15 +1386,35 @@ function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
   var actionCol = document.createElement("div");
   actionCol.className = "item-action-col";
 
-  // 実績記録（フェーズ1）: 押すと現在時刻を actualStart に記録する（記録済みなら現在時刻で上書き）。
+  // 実績記録UX改善（フェーズ2 23）: 押すと現在時刻を actualStart に記録する。
+  // 記録済みの項目に再度押しても現在時刻で上書きしない（二度押し防止）。代わりに実績の
+  // 編集モードを開き、手入力で修正できるようにする（「後から時刻を手入力できる欄が見つからない」
+  // というユーザーの声への対応。実績表示クリックでも同じ編集モードに入れるが、✓ボタンからも
+  // 入り口を作ることでボタンの意味を「記録 or 修正」に一本化する）
+  // また、未記録でもその日が今日でなければ「今」を記録しても無意味なため、予定開始時刻を
+  // プリセットした状態で編集モードを開く（旅行後の振り返り入力用）
   // viewOnly（公開URL閲覧）中は既存の編集系ボタンと同じ扱いでCSS側（body.view-only-mode）から非表示にする
   var actualRecordBtn = document.createElement("button");
   actualRecordBtn.type = "button";
-  actualRecordBtn.className = "item-actual-record-btn";
+  actualRecordBtn.className = "item-actual-record-btn" + (item.actualStart ? " is-recorded" : "");
   actualRecordBtn.textContent = "✓";
-  actualRecordBtn.title = t("timeline.actualRecordBtnTitle");
-  actualRecordBtn.setAttribute("aria-label", t("timeline.actualRecordBtnTitle"));
+  var actualRecordBtnLabel = t(item.actualStart ? "timeline.actualRecordedBtnTitle" : "timeline.actualRecordBtnTitle");
+  actualRecordBtn.title = actualRecordBtnLabel;
+  actualRecordBtn.setAttribute("aria-label", actualRecordBtnLabel);
   actualRecordBtn.addEventListener("click", function () {
+    if (viewOnly) return;
+    if (item.actualStart) {
+      actualStartEditPreset = null;
+      actualStartEditingId = item.id;
+      render();
+      return;
+    }
+    if (day.date && day.date !== todayLocalDateStr()) {
+      actualStartEditPreset = minutesToHHMM(startMin);
+      actualStartEditingId = item.id;
+      render();
+      return;
+    }
     recordActualStart(item.id);
   });
   actionCol.appendChild(actualRecordBtn);
@@ -1814,11 +2000,15 @@ function findAnyDayItemById(id) {
 }
 
 // 実績記録（フェーズ1）: ✓ボタンの中核。押した瞬間の端末ローカル時刻を actualStart に記録する
-// （既に記録済みでも現在時刻で上書きする）。GPS完全自動追尾はしない設計（PWAはバックグラウンドで
-// 位置取得できないため、常時追跡は成立しない）。可能なら1回だけ現在地を取得して actualLat/actualLon に
-// 追記するが、これは非同期のおまけ扱いとし、時刻の記録と再描画はGPSの結果を待たずに即座に行う。
-// navigator.geolocation が無い環境（jsdomでのテスト含む）でも時刻の記録自体は動くようガードする
-function recordActualStart(id) {
+// （既に記録済みでも現在時刻で上書きする。フェーズ2以降は40-uiのボタン側で「記録済みなら上書きせず
+// 編集モードを開く」よう分岐しているため、この関数自体が呼ばれるのは未記録時のみになった）。
+// GPS完全自動追尾はしない設計（PWAはバックグラウンドで位置取得できないため、常時追跡は成立しない）。
+// 可能なら1回だけ現在地を取得して actualLat/actualLon に追記するが、これは非同期のおまけ扱いとし、
+// 時刻の記録と再描画はGPSの結果を待たずに即座に行う。
+// navigator.geolocation が無い環境（jsdomでのテスト含む）でも時刻の記録自体は動くようガードする。
+// 第2引数 coords（{lat, lon}）は、到着の自動提案（フェーズ2 23b）が既に取得済みの現在地を渡すためのもの。
+// 渡された場合は getCurrentPosition を呼ばずその座標をそのまま保存する（二重のGPS取得・二重の権限確認を避ける）
+function recordActualStart(id, coords) {
   if (viewOnly) return;
   var found = findAnyDayItemById(id);
   if (!found) return;
@@ -1828,6 +2018,17 @@ function recordActualStart(id) {
   found.item.actualAt = now.getTime();
   saveState();
   render();
+
+  if (coords && typeof coords.lat === "number" && isFinite(coords.lat) && typeof coords.lon === "number" && isFinite(coords.lon)) {
+    var withCoords = findAnyDayItemById(id);
+    if (withCoords) {
+      withCoords.item.actualLat = coords.lat;
+      withCoords.item.actualLon = coords.lon;
+      withCoords.item.actualAt = Date.now();
+      saveState();
+    }
+    return;
+  }
 
   if (!window.navigator || !navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") {
     return;
@@ -1843,6 +2044,13 @@ function recordActualStart(id) {
       again.item.actualLon = typeof lonVal === "number" && isFinite(lonVal) ? lonVal : null;
       // 実績の端末間マージ（23追記）: GPS取得成功時も実績の更新とみなし最終更新時刻を進める
       again.item.actualAt = Date.now();
+      // 到着の自動提案（23b）: permissions APIが無い環境向けのフォールバック判定用に、
+      // 「この端末は位置情報を許可している」という事実をローカルに残しておく
+      try {
+        window.localStorage.setItem(GEO_GRANTED_KEY, "1");
+      } catch (e) {
+        /* ignore */
+      }
       // 描画済みの時刻・カード構成は変えないため render() は呼ばない。座標は保存のみ追記する
       saveState();
     },
