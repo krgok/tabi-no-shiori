@@ -525,6 +525,10 @@ function getDayTimedItems(day) {
     var cursorBefore = cursor;
     var startMin;
     var conflict = false;
+    // 実績時刻のタイムゾーン対応（23d）: この項目の開始時刻が属するtz。切替が起きるのは
+    // このあとのmove判定ブロックのみなので、ここで捕まえた値が「切替前のcurTz」になる。
+    // move項目自身のstartTzが出発側になるのはこのため（実績=出発時刻を記録する項目のため）
+    var startTz = curTz;
     if (item.fixedStart) {
       startMin = Math.floor(cursorBefore / 1440) * 1440 + parseTimeToMinutes(item.fixedStart);
       if (startMin < cursorBefore) conflict = true;
@@ -551,8 +555,28 @@ function getDayTimedItems(day) {
     }
 
     cursor = endMin;
-    return { item: item, startMin: startMin, endMin: endMin, localTimeNote: localTimeNote, moveTzDiff: moveTzDiff, conflict: conflict };
+    return { item: item, startMin: startMin, endMin: endMin, localTimeNote: localTimeNote, moveTzDiff: moveTzDiff, conflict: conflict, startTz: startTz };
   });
+}
+
+// 実績記録（23d）: 項目idから、その項目が属する日のgetDayTimedItems()を通してstartTzを引く。
+// findAnyDayItemByIdと同じ理由（✓ボタンのGPSコールバックは非同期で、呼ばれた時点の
+// currentDayIndexが変わっている可能性がある）で全ての日を対象に探す。見つからなければ""（端末時間扱い）
+function findItemStartTz(id) {
+  if (!trip || !trip.days) return "";
+  for (var d = 0; d < trip.days.length; d++) {
+    var day = trip.days[d];
+    var items = day.items || [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].id === id) {
+        var timed = getDayTimedItems(day).filter(function (tm) {
+          return tm.item.id === id;
+        });
+        return timed.length ? timed[0].startTz : "";
+      }
+    }
+  }
+  return "";
 }
 
 // 行程番号（move以外の項目に上から1,2,3...を振る。日ごとにリセット）。
@@ -634,14 +658,31 @@ function buildDayActualSummaryEl(day, timedItems) {
   return el2;
 }
 
+// 実績時刻のタイムゾーン対応（23d）: 「今日か」の判定における深夜前後の取りこぼし対策。
+// 端末の日付だけで判定すると、日をまたぐ移動の直後で日のタイムゾーンでは既に日付が変わっているのに
+// 端末はまだ前日のまま…という食い違いで「今日の日程」を取りこぼすことがあるため、
+// 端末の今日 または day.tzでの今日のどちらかに一致すれば「今日」とみなす
+function isDayToday(day, now) {
+  if (!day || !day.date) return false;
+  var n = now instanceof Date ? now : new Date();
+  var localStr = n.getFullYear() + "-" + pad2(n.getMonth() + 1) + "-" + pad2(n.getDate());
+  if (day.date === localStr) return true;
+  if (day.tz && dateStrInTz(n, day.tz) === day.date) return true;
+  return false;
+}
+
 // 到着の自動提案（実績記録フェーズ2 23b）: 今日の日の項目のうち、座標があり・未記録・
 // 「あとで」を押されていないものの中から、現在地に最も近い1件を返す純粋関数（DOMに触れず、
 // テストから直接呼べるようにしてある）。半径(ARRIVAL_PROMPT_RADIUS_M)を超えるものは対象外
+// 第3引数todayStrは既存の呼び出し元・テストとの互換のため残している（端末の今日の日付文字列）。
+// これに加え、day.tzでの今日（isDayToday）にも一致すれば対象にする（23d 深夜前後の取りこぼし対策）
 function findArrivalCandidate(tripObj, coords, todayStr) {
   if (!tripObj || !tripObj.days || !coords) return null;
+  var now = new Date();
   var best = null;
   tripObj.days.forEach(function (day, dayIndex) {
-    if (!day.date || day.date !== todayStr) return;
+    if (!day.date) return;
+    if (day.date !== todayStr && !isDayToday(day, now)) return;
     (day.items || []).forEach(function (item) {
       if (item.actualStart) return;
       if (arrivalPromptDismissedIds[item.id]) return;
@@ -686,9 +727,11 @@ function maybePromptArrival(trigger) {
   var now = Date.now();
   if (now - lastArrivalPromptAt < ARRIVAL_PROMPT_MIN_INTERVAL_MS) return;
   if (!trip || !trip.days) return;
-  var todayStr = todayLocalDateStr();
+  // 実績時刻のタイムゾーン対応（23d）: 端末の今日 または day.tzでの今日のどちらかに
+  // 一致すれば「今日の日程がある」とみなす（isDayToday参照）
+  var nowForTodayCheck = new Date();
   var hasToday = trip.days.some(function (d) {
-    return d.date === todayStr;
+    return isDayToday(d, nowForTodayCheck);
   });
   // 今日の日程が無ければ、無駄な位置取得・権限プロンプトを避けるためGPSを呼ばずに終える
   if (!hasToday) return;
@@ -1409,7 +1452,10 @@ function buildItemCard(item, startMin, endMin, day, idx, numMap, timedMeta) {
       render();
       return;
     }
-    if (day.date && day.date !== todayLocalDateStr()) {
+    // 実績時刻のタイムゾーン対応（23d）: 「今日か過去日か」は端末の日付ではなく、
+    // この項目のタイムゾーン（timedMeta.startTz）での今日で判定する。国をまたぐ移動の直後で
+    // 端末がまだ出発地時間のままでも、到着地時間ではもう日付が変わっている、といったケースに対応するため
+    if (day.date && day.date !== dateStrInTz(new Date(), timedMeta.startTz)) {
       actualStartEditPreset = minutesToHHMM(startMin);
       actualStartEditingId = item.id;
       render();
@@ -1999,7 +2045,7 @@ function findAnyDayItemById(id) {
   return null;
 }
 
-// 実績記録（フェーズ1）: ✓ボタンの中核。押した瞬間の端末ローカル時刻を actualStart に記録する
+// 実績記録（フェーズ1）: ✓ボタンの中核。押した瞬間の時刻を actualStart に記録する
 // （既に記録済みでも現在時刻で上書きする。フェーズ2以降は40-uiのボタン側で「記録済みなら上書きせず
 // 編集モードを開く」よう分岐しているため、この関数自体が呼ばれるのは未記録時のみになった）。
 // GPS完全自動追尾はしない設計（PWAはバックグラウンドで位置取得できないため、常時追跡は成立しない）。
@@ -2007,13 +2053,16 @@ function findAnyDayItemById(id) {
 // 時刻の記録と再描画はGPSの結果を待たずに即座に行う。
 // navigator.geolocation が無い環境（jsdomでのテスト含む）でも時刻の記録自体は動くようガードする。
 // 第2引数 coords（{lat, lon}）は、到着の自動提案（フェーズ2 23b）が既に取得済みの現在地を渡すためのもの。
-// 渡された場合は getCurrentPosition を呼ばずその座標をそのまま保存する（二重のGPS取得・二重の権限確認を避ける）
+// 渡された場合は getCurrentPosition を呼ばずその座標をそのまま保存する（二重のGPS取得・二重の権限確認を避ける）。
+// 実績時刻のタイムゾーン対応（23d）: 端末の時計のHH:MMをそのまま使うと、国をまたぐ移動の直後で
+// 端末がまだ出発地時間のままだと予定との差が誤って表示されるため、この項目の開始タイムゾーン
+// （findItemStartTz。項目がtz未設定の日にあれば""=端末時間扱い）での現地時刻を記録する
 function recordActualStart(id, coords) {
   if (viewOnly) return;
   var found = findAnyDayItemById(id);
   if (!found) return;
   var now = new Date();
-  found.item.actualStart = pad2(now.getHours()) + ":" + pad2(now.getMinutes());
+  found.item.actualStart = formatHHMMInTz(now, findItemStartTz(id));
   // 実績の端末間マージ（23追記）: 記録のたびに最終更新時刻を記録する（複数端末での実績マージの判断材料）
   found.item.actualAt = now.getTime();
   saveState();

@@ -13,7 +13,7 @@
  * ========================================================= */
 // ⚙️設定モーダルに表示する版数（サポート時に「更新が端末に届いたか」を確認する手掛かり）。
 // sw.js の CACHE_VERSION と常に同じ値にすること。一致は tests/test-pwa.js がCIで検知する
-var APP_VERSION = "v10";
+var APP_VERSION = "v11";
 var STORAGE_KEY_V1 = "tabi-shiori-v1";
 var STORAGE_KEY = "tabi-shiori-v2"; // v2: { currentId, trips: [{ id, data: <trip> }] }（複数しおりの管理 9）
 var GEO_CACHE_KEY = "tabi-geo-cache";
@@ -292,6 +292,51 @@ function normalizeDateStr(v) {
 function todayLocalDateStr() {
   var d = new Date();
   return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+}
+
+// 実績時刻のタイムゾーン対応（23d）: date を tz の現地時間の "HH:MM" にして返す。
+// tz が空文字/無効なときは端末ローカルの時刻（従来の recordActualStart と同じ計算）にフォールバックする。
+// hour12:false でも一部の環境（ICUのhourCycle="h24"実装）は深夜0時を "24:00" として返すため、
+// "24" は "00" に正規化する。Intl未対応・不正なtz文字列（存在しないIANA名）は例外を投げるので、
+// 例外時は黙って端末ローカルにフォールバックする（呼び出し側で例外を気にしなくてよいようにするため）
+function formatHHMMInTz(date, tz) {
+  if (!tz) return pad2(date.getHours()) + ":" + pad2(date.getMinutes());
+  try {
+    var dtf = new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false });
+    var parts = dtf.formatToParts(date);
+    var h = "", m = "";
+    parts.forEach(function (p) {
+      if (p.type === "hour") h = p.value;
+      if (p.type === "minute") m = p.value;
+    });
+    if (!h || !m) throw new Error("invalid parts");
+    if (h === "24") h = "00"; // 深夜0時の "24:00" 表記を正規化
+    if (h.length < 2) h = "0" + h;
+    if (m.length < 2) m = "0" + m;
+    return h + ":" + m;
+  } catch (e) {
+    return pad2(date.getHours()) + ":" + pad2(date.getMinutes());
+  }
+}
+
+// 実績時刻のタイムゾーン対応（23d）: date を tz の現地時間の "YYYY-MM-DD" にして返す。
+// tz が空文字/無効なときは todayLocalDateStr() と同じ計算（ただし引数の date を使う）にフォールバックする
+function dateStrInTz(date, tz) {
+  if (!tz) return date.getFullYear() + "-" + pad2(date.getMonth() + 1) + "-" + pad2(date.getDate());
+  try {
+    var dtf = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" });
+    var parts = dtf.formatToParts(date);
+    var y = "", mo = "", da = "";
+    parts.forEach(function (p) {
+      if (p.type === "year") y = p.value;
+      if (p.type === "month") mo = p.value;
+      if (p.type === "day") da = p.value;
+    });
+    if (!y || !mo || !da) throw new Error("invalid parts");
+    return y + "-" + mo + "-" + da;
+  } catch (e) {
+    return date.getFullYear() + "-" + pad2(date.getMonth() + 1) + "-" + pad2(date.getDate());
+  }
 }
 
 function sleep(ms) {
