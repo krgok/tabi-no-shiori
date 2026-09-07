@@ -51,8 +51,14 @@
           🧳
           <span id="prepBadge" class="header-icon-badge hidden">0</span>
         </button>
-        <button type="button" id="shareBtn" class="btn btn-outline" data-i18n="header.share">共有</button>
-        <button type="button" id="textioBtn" class="btn btn-outline" data-i18n="header.textio">CSV入出力</button>
+        <button type="button" id="shareBtn" class="btn btn-outline" data-i18n-aria="header.share" aria-label="共有" title="共有">
+          <span class="btn-icon-only" aria-hidden="true">📤</span>
+          <span class="btn-label" data-i18n="header.share">共有</span>
+        </button>
+        <button type="button" id="textioBtn" class="btn btn-outline" data-i18n-aria="header.textio" aria-label="CSV入出力" title="CSV入出力">
+          <span class="btn-icon-only" aria-hidden="true">📄</span>
+          <span class="btn-label" data-i18n="header.textio">CSV入出力</span>
+        </button>
         <button type="button" id="printBtn" class="btn btn-outline btn-icon" data-i18n-aria="header.printAria" aria-label="PDF出力" title="PDF出力">🖨</button>
         <button type="button" id="settingsBtn" class="btn btn-outline btn-icon" data-i18n-aria="settings.buttonAria" aria-label="設定" title="設定">⚙️</button>
         <!-- Google ログイン＋Firestore クラウド保存（15）: Firebase SDK読み込み・初期化に失敗した場合は非表示になる -->
@@ -67,7 +73,11 @@
       <button type="button" id="addDayBtn" class="btn-add-day" data-i18n="day.addDay">＋ 日を追加</button>
     </div>
 
-    <div class="day-meta">
+    <!-- モバイルヘッダー簡略化: 幅の狭い画面では日の設定(.day-meta)を折りたたみ、
+         この1行の要約ボタンだけを常時表示する（デスクトップではCSSでトグルを隠し .day-meta を常時表示） -->
+    <button type="button" id="dayMetaToggle" class="day-meta-toggle" aria-expanded="false" aria-controls="dayMeta" data-i18n-aria="day.metaToggleAria" aria-label="日の設定を開閉" title="日の設定を開閉"></button>
+
+    <div class="day-meta" id="dayMeta">
       <label class="day-meta-field">
         <span data-i18n="day.date">日付</span>
         <input type="date" id="dayDateInput">

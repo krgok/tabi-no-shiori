@@ -477,6 +477,33 @@ select {
   opacity: 0.75;
 }
 
+/* モバイルヘッダー簡略化: 日の設定(.day-meta)の折りたたみトグル。
+   デスクトップでは .day-meta を常に表示するのでトグル自体は不要（@media内でモバイルのみ表示に切り替える） */
+.day-meta-toggle {
+  display: none;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  margin: 2px 0 4px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.day-meta-toggle:hover {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+/* 共有/CSV入出力ボタンのアイコン専用表示（モバイル幅で文字の代わりに出す）。
+   デスクトップでは常に非表示にし、通常のテキストボタンのまま見せる */
+.btn-icon-only {
+  display: none;
+}
+
 /* ===================== メイン ===================== */
 
 .app-main {
@@ -2354,17 +2381,95 @@ select {
 /* ===================== レスポンシブ ===================== */
 
 @media (max-width: 480px) {
+  /* モバイルでヘッダーの高さを半分以下に抑える（ユーザー報告: 行程が見えないほど占有していた）。
+     方針は2点: (1) 日の設定(.day-meta)をトグルで折りたたむ（既定は閉）
+     (2) ツールバー(.header-actions)を折り返さない横1列にしてアイコン化する
+     いずれもデスクトップの見た目には触れない（このメディアクエリの外では従来通り） */
   .app-header {
-    padding: 12px 10px 8px;
+    padding: 8px 10px 6px;
+  }
+
+  .header-title-row {
+    gap: 6px;
   }
 
   .trip-title {
-    font-size: 1.25rem;
+    font-size: 1.05rem;
+    margin: 2px 4px;
+    padding: 2px 6px;
+  }
+
+  .trip-title-wrap {
+    gap: 0;
+  }
+
+  .trip-sub-row {
+    margin: 0 4px 0 8px;
+  }
+
+  /* ツールバーを折り返さない横1列にし、はみ出た分は横スクロールで見せる
+     （スクロールバー自体は見た目の圧迫を避けるため隠す） */
+  .header-actions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 6px;
+    padding-top: 2px; /* 🧳バッジ(top:-4px)が上端で切れないための余白 */
+  }
+
+  .header-actions::-webkit-scrollbar {
+    display: none;
   }
 
   .header-actions .btn {
-    padding: 7px 12px;
+    padding: 7px 10px;
     font-size: 0.78rem;
+    flex: none;
+  }
+
+  /* 「共有」「CSV入出力」はモバイル幅では文字を隠しアイコンだけにして横幅を節約する */
+  .btn-label {
+    display: none;
+  }
+
+  .btn-icon-only {
+    display: inline;
+    font-size: 1rem;
+  }
+
+  #shareBtn,
+  #textioBtn {
+    padding: 7px 10px;
+  }
+
+  /* 言語セレクトは🌐アイコン+短い表示にして幅を縮める */
+  .lang-switch {
+    padding: 5px 6px;
+    flex: none;
+  }
+
+  #langSelect {
+    max-width: 54px;
+    font-size: 0.72rem;
+  }
+
+  .day-tabs-row {
+    margin-top: 8px;
+  }
+
+  /* 日の設定(.day-meta)は既定で折りたたみ、トグルボタンだけを常時1行で見せる。
+     開閉状態は #dayMetaToggle のクリックで .is-open を付け外しして切り替える（js/40-ui.js） */
+  .day-meta-toggle {
+    display: block;
+  }
+
+  .day-meta {
+    display: none;
+  }
+
+  .day-meta.is-open {
+    display: flex;
   }
 
   .app-main {

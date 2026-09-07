@@ -13,11 +13,13 @@
  * ========================================================= */
 // ⚙️設定モーダルに表示する版数（サポート時に「更新が端末に届いたか」を確認する手掛かり）。
 // sw.js の CACHE_VERSION と常に同じ値にすること。一致は tests/test-pwa.js がCIで検知する
-var APP_VERSION = "v12";
+var APP_VERSION = "v13";
 var STORAGE_KEY_V1 = "tabi-shiori-v1";
 var STORAGE_KEY = "tabi-shiori-v2"; // v2: { currentId, trips: [{ id, data: <trip> }] }（複数しおりの管理 9）
 var GEO_CACHE_KEY = "tabi-geo-cache";
 var MAP_OPEN_KEY = "tabi-map-open";
+// モバイルヘッダー簡略化: 日の設定(.day-meta)の開閉状態。既定は閉（モバイルでヘッダーの高さを抑えるため）
+var DAYMETA_OPEN_KEY = "tabi-shiori-daymeta-open";
 // 準備モーダル（持ち物・やること）のサイズ。ユーザーが変えた大きさを次回も再現する
 var PREP_SIZE_KEY = "tabi-prep-size";
 var NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";

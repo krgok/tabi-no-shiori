@@ -65,6 +65,9 @@ function cacheDom() {
   // 非公開マーク（14拡張）: 日単位の🔓/🔒トグルとバッジ
   el.dayPrivToggle = document.getElementById("dayPrivToggle");
   el.dayPrivBadge = document.getElementById("dayPrivBadge");
+  // モバイルヘッダー簡略化: 日の設定(.day-meta)の折りたたみトグル
+  el.dayMetaToggle = document.getElementById("dayMetaToggle");
+  el.dayMeta = document.getElementById("dayMeta");
   el.printBtn = document.getElementById("printBtn");
   el.routeBtn = document.getElementById("routeBtn");
   el.routeBtnLabel = document.getElementById("routeBtnLabel");
@@ -396,6 +399,75 @@ function renderDayMeta() {
   if (el.dayPrivBadge) {
     el.dayPrivBadge.classList.toggle("hidden", !day.priv);
   }
+
+  // モバイルヘッダー簡略化: 日付/開始時刻/tz/🔒 のいずれかが変わるたびに、
+  // ここ（renderDayMeta。日の切替時も render() 経由で必ず通る）から要約を更新する
+  updateDayMetaSummary();
+}
+
+// モバイルヘッダー簡略化: 開始時刻表示は "06:00" のような先頭ゼロ入りの<input type=time>値を
+// "6:00" のように詰めて見せる（要約1行の幅を節約するための表示専用整形。保存値は変えない）
+function formatStartTimeForSummary(st) {
+  var m = /^(\d{2}):(\d{2})$/.exec(st || "");
+  if (!m) return st || "";
+  return parseInt(m[1], 10) + ":" + m[2];
+}
+
+// モバイルヘッダー簡略化: トグルボタンに表示する現在の日の要約テキストを組み立てる。
+// 日付/開始時刻/tz/🔒 のいずれかが変わったとき、日を切り替えたとき、言語を切り替えたときに
+// renderDayMeta() から呼ばれる（漏れを防ぐため、この1箇所に集約する）
+function updateDayMetaSummary() {
+  if (!el.dayMetaToggle) return;
+  var day = trip.days[currentDayIndex];
+  if (!day) return;
+  var parts = [];
+  if (day.date) {
+    parts.push("📅 " + day.date.replace(/-/g, "/"));
+  }
+  parts.push(formatStartTimeForSummary(day.startTime || "09:00") + "〜");
+  parts.push(day.tz ? day.tz : t("day.tzNone"));
+  var summary = parts.join(" ・ ");
+  if (day.priv) summary += " 🔒";
+  var open = !!(el.dayMeta && el.dayMeta.classList.contains("is-open"));
+  summary += " " + (open ? "▾" : "▸");
+  el.dayMetaToggle.textContent = summary;
+}
+
+// モバイルヘッダー簡略化: 開閉状態の永続化（既定は閉）。閲覧モードでは他のUI設定と同様、
+// localStorageを一切変更しない絶対条件を優先し、書き込みだけガードする（読み取り・表示は妨げない）
+function isDayMetaOpen() {
+  try {
+    return localStorage.getItem(DAYMETA_OPEN_KEY) === "1";
+  } catch (e) {
+    return false;
+  }
+}
+
+function setDayMetaOpen(open) {
+  if (viewOnly) return;
+  try {
+    localStorage.setItem(DAYMETA_OPEN_KEY, open ? "1" : "0");
+  } catch (e) {
+    /* 保存できなくても動作に支障はない */
+  }
+}
+
+// 保存済みの開閉状態をDOMへ反映する（初期化時に1回呼ぶ）。以降はトグルのクリックが
+// クラスと保存値を同時に更新するので、render() のたびにここへ戻す必要はない
+function applyDayMetaOpenState() {
+  if (!el.dayMeta || !el.dayMetaToggle) return;
+  var open = isDayMetaOpen();
+  el.dayMeta.classList.toggle("is-open", open);
+  el.dayMetaToggle.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function toggleDayMetaOpen() {
+  if (!el.dayMeta || !el.dayMetaToggle) return;
+  var open = !el.dayMeta.classList.contains("is-open");
+  el.dayMeta.classList.toggle("is-open", open);
+  el.dayMetaToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  setDayMetaOpen(open);
+  updateDayMetaSummary();
 }
 
 /* =========================================================
