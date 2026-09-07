@@ -29,6 +29,7 @@ const TEST_FILES = [
   "test-geocode-sanity.js",
   "test-sync-now.js",
   "test-actual-ux.js",
+  "test-actual-tz.js",
   "test-asset-hash-logic.js",
   // 版数上げ忘れ検知（内容ハッシュ）はスナップショット tests/asset-hash.json を書き換えることがあるため最後に回す
   "test-asset-hash.js"
