@@ -114,6 +114,10 @@ function bindEvents() {
     saveState();
     render();
   });
+  // モバイルヘッダー簡略化: 日の設定(.day-meta)の折りたたみトグル
+  if (el.dayMetaToggle) {
+    el.dayMetaToggle.addEventListener("click", toggleDayMetaOpen);
+  }
   // 非公開マーク（14拡張）: 日単位の🔓/🔒トグル。表示/非表示はCSSの .view-only-mode スコープで制御する
   if (el.dayPrivToggle) {
     el.dayPrivToggle.addEventListener("click", function () {
@@ -429,6 +433,8 @@ function init() {
 
   initMap();
   applyMapPanelState();
+  // モバイルヘッダー簡略化: 保存済みの開閉状態を初期表示に反映する（以降はトグル操作が自分で維持する）
+  applyDayMetaOpenState();
   initFirebase();
   bindEvents();
   // 公開層と公開URL（16）・編集できる共有リンク（18）: #p= / #e= / #d= はハッシュの接頭辞が異なるため排他。
