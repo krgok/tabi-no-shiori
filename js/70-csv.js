@@ -524,10 +524,17 @@ function parseTripCsv(text) {
   var listHeaderIdx = -1;
   for (var bi = headerIdx + 1; bi < rows.length; bi++) {
     if (isBlankCsvRow(rows[bi])) {
-      mainEnd = bi;
-      // 空行の次がリストのヘッダー。空行だけで終わっている場合は第2テーブル無し
-      listHeaderIdx = bi + 1 < rows.length ? bi + 1 : -1;
-      break;
+      // 空行の次（連続する空行は飛ばす）がリストのヘッダーなら、そこから第2テーブル。
+      // そうでなければ日の区切りに入れた空行など、行程テーブルの途中の空行なので読み飛ばして続ける
+      // （以前は空行以降を丸ごと第2テーブル扱いにして、行程の後半を警告なしに捨てていた）
+      var nb = bi + 1;
+      while (nb < rows.length && isBlankCsvRow(rows[nb])) nb++;
+      if (nb < rows.length && isChecklistHeaderRow(rows[nb])) {
+        mainEnd = bi;
+        listHeaderIdx = nb;
+        break;
+      }
+      continue;
     }
     if (isChecklistHeaderRow(rows[bi])) {
       // 空行が失われたCSV。ヘッダー行の直前までが行程テーブル

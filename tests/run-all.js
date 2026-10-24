@@ -34,6 +34,7 @@ const TEST_FILES = [
   "test-gmap-coords-paste.js",
   "test-mobile-header.js",
   "test-audit-2026-10.js",
+  "test-audit-2026-10b.js",
   "test-asset-hash-logic.js",
   // 版数上げ忘れ検知（内容ハッシュ）はスナップショット tests/asset-hash.json を書き換えることがあるため最後に回す
   "test-asset-hash.js"

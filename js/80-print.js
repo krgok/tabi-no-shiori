@@ -205,12 +205,76 @@ function handlePrintClick() {
 /* =========================================================
  * モーダル & トースト
  * ========================================================= */
+// モーダルのアクセシビリティ: 開いたとき ダイアログとして読み上げられるよう role/aria-modal を付け、
+// ダイアログ自体へフォーカスを移す（キーボード・スクリーンリーダー利用者が背後の画面に取り残されない。
+// 入力欄を直接フォーカスすると携帯でキーボードが勝手に開くため、箱そのものにする）。
+// 閉じたときは開く前にフォーカスしていた要素へ戻す。Esc で最前面を閉じる・Tab はモーダル内で循環する
+// （keydown は bindEvents で1回だけ登録）。modalFocusStack は開いた順のスタック
+var modalFocusStack = [];
+var MODAL_FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function modalFocusables(modal) {
+  return Array.prototype.filter.call(modal.querySelectorAll(MODAL_FOCUSABLE), function (n) {
+    return !n.closest(".hidden");
+  });
+}
+
 function openModal(modal) {
   modal.classList.remove("hidden");
+  var box = modal.querySelector(".modal");
+  if (box) {
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+  }
+  modalFocusStack = modalFocusStack.filter(function (e) {
+    return e.modal !== modal;
+  });
+  modalFocusStack.push({ modal: modal, prev: document.activeElement });
+  if (box) {
+    box.setAttribute("tabindex", "-1");
+    box.focus();
+  }
 }
 
 function closeModal(modal) {
-  if (modal) modal.classList.add("hidden");
+  if (!modal) return;
+  modal.classList.add("hidden");
+  var idx = -1;
+  modalFocusStack.forEach(function (e, i) {
+    if (e.modal === modal) idx = i;
+  });
+  if (idx === -1) return;
+  var prev = modalFocusStack.splice(idx, 1)[0].prev;
+  if (prev && prev !== document.body && document.contains(prev) && typeof prev.focus === "function") prev.focus();
+}
+
+function onModalKeydown(e) {
+  var top = null;
+  modalFocusStack.forEach(function (entry) {
+    if (!entry.modal.classList.contains("hidden")) top = entry.modal;
+  });
+  if (!top) return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    top.click(); // 背景クリックと同じ閉じ方（確認モーダルのコールバック破棄も含む）
+    return;
+  }
+  if (e.key !== "Tab") return;
+  var items = modalFocusables(top);
+  if (!items.length) return;
+  var firstEl = items[0];
+  var lastEl = items[items.length - 1];
+  var box = top.querySelector(".modal") || top;
+  if (!box.contains(document.activeElement)) {
+    e.preventDefault();
+    firstEl.focus();
+  } else if (e.shiftKey && (document.activeElement === firstEl || document.activeElement === box)) {
+    e.preventDefault();
+    lastEl.focus();
+  } else if (!e.shiftKey && document.activeElement === lastEl) {
+    e.preventDefault();
+    firstEl.focus();
+  }
 }
 
 function showConfirm(title, body, onOk) {
