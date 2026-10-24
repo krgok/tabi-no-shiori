@@ -610,14 +610,36 @@ function checkSharedHash() {
  * 公開層と公開URL（16）: #p=<publicId> の読み取り専用閲覧
  * ========================================================= */
 
+// #p= / #e= の ID を取り出す。壊れた %エスケープ（decodeURIComponent が例外を投げる）や、
+// Firestore のドキュメントIDとして想定外の文字（"/" でパスが深くなる等）を含む場合は null を返し、
+// 起動を止めずに通常モードで開けるようにする（リンクが途中で切れた・書き換えられた場合の保険）
+function parseHashDocId(hash) {
+  var raw;
+  try {
+    raw = decodeURIComponent(hash.slice(3));
+  } catch (e) {
+    return null;
+  }
+  return /^[A-Za-z0-9_-]{1,128}$/.test(raw) ? raw : null;
+}
+
+// 不正な #p= / #e= を捨てて通常モードで続行する（再読み込みで同じ失敗を繰り返さないようハッシュも消す）
+function dropBadHash(toastKey) {
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+  showToast(t(toastKey), "error");
+}
+
 // #p=<publicId> があれば読み取り専用モードで起動する。ログイン不要・localStorageは一切変更しない。
 // ハッシュを検出した時点で同期的に viewOnly=true にすることで、この後に呼ばれる init() 末尾の
 // saveState() を含め、以降の保存処理を確実に無効化してからFirestoreへの非同期取得を行う
 function checkPublicHash() {
   var hash = window.location.hash;
   if (!hash || hash.indexOf("#p=") !== 0) return;
-  var publicId = decodeURIComponent(hash.slice(3));
-  if (!publicId) return;
+  var publicId = parseHashDocId(hash);
+  if (!publicId) {
+    dropBadHash("viewOnly.notFound");
+    return;
+  }
 
   viewOnly = true;
   render();
@@ -840,8 +862,11 @@ function subscribeCollabListener(editId) {
 function checkCollabHash() {
   var hash = window.location.hash;
   if (!hash || hash.indexOf("#e=") !== 0) return;
-  var editId = decodeURIComponent(hash.slice(3));
-  if (!editId) return;
+  var editId = parseHashDocId(hash);
+  if (!editId) {
+    dropBadHash("collab.notFound");
+    return;
+  }
 
   collabMode = true;
   render();

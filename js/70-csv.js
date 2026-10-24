@@ -56,6 +56,21 @@ function isChecklistHeaderRow(fields) {
   });
 }
 
+// CSVインジェクション対策（CWE-1236）: 先頭が = + - @ タブ CR の文字列は、ExcelなどでCSVを開くと
+// 数式として実行されうる（他人から共有されたしおりに仕込まれていた場合など）。書き出し時に先頭へ ' を足して
+// 文字列として扱わせ、読み込み時に外す。先頭の ' の連続の後に危険文字が続く文字列も対象にするので、
+// どんな文字列でも「書き出し→読み込み」で元に戻る。対象は自由記述の列（名前・メモ・リンク・リスト）だけで、
+// 数値列（分・実績の緯度経度）や日付・時刻はそのまま出す
+function csvGuardFormula(value) {
+  var str = value == null ? "" : String(value);
+  return /^'*[=+\-@\t\r]/.test(str) ? "'" + str : str;
+}
+
+function csvUnguardFormula(value) {
+  var str = value == null ? "" : String(value);
+  return /^'+[=+\-@\t\r]/.test(str) ? str.slice(1) : str;
+}
+
 // RFC4180: フィールドに , " 改行のいずれかを含む場合のみ "..." で囲み、内部の " は "" にエスケープする
 function csvEscapeField(value) {
   var str = value == null ? "" : String(value);
@@ -159,10 +174,10 @@ function exportTripCsv() {
         day.startTime || "",
         catLabel,
         modeLabel,
-        item.name || "",
+        csvGuardFormula(item.name),
         String(item.dur || 0),
-        item.note || "",
-        gmapVal,
+        csvGuardFormula(item.note),
+        csvGuardFormula(gmapVal),
         day.tz || "",
         item.cat === "move" ? item.arriveTz || "" : "",
         item.priv ? "1" : "0",
@@ -186,10 +201,10 @@ function exportTripCsv() {
   var listRows = [CHECKLIST_CSV_COLUMNS.concat(CHECKLIST_CSV_OPTIONAL_COLUMNS)];
   var listLabels = window.I18N.LIST_NAMES[L];
   trip.packing.forEach(function (it) {
-    listRows.push([listLabels.packing, it.text || "", it.done ? "1" : "0", it.priv ? "1" : "0", trip.packingPriv ? "1" : "0"]);
+    listRows.push([listLabels.packing, csvGuardFormula(it.text), it.done ? "1" : "0", it.priv ? "1" : "0", trip.packingPriv ? "1" : "0"]);
   });
   trip.todos.forEach(function (it) {
-    listRows.push([listLabels.todos, it.text || "", it.done ? "1" : "0", it.priv ? "1" : "0", trip.todosPriv ? "1" : "0"]);
+    listRows.push([listLabels.todos, csvGuardFormula(it.text), it.done ? "1" : "0", it.priv ? "1" : "0", trip.todosPriv ? "1" : "0"]);
   });
   var listCsv = listRows.map(csvFormatRow).join("\r\n") + "\r\n";
 
@@ -350,15 +365,15 @@ function parseCsvItemRow(fields, colIndex) {
   var cat = window.I18N.resolveCategory(catWord);
   if (!cat) return null;
 
-  var name = (fields[colIndex.name] || "").trim();
+  var name = csvUnguardFormula((fields[colIndex.name] || "").trim());
   if (!name) return null;
 
   var minutesStr = fields[colIndex.minutes] || "";
   var durMatch = /(\d+(?:\.\d+)?)/.exec(minutesStr);
   var dur = durMatch ? Math.round(parseFloat(durMatch[1])) : 0;
 
-  var note = fields[colIndex.note] || "";
-  var gmap = fields[colIndex.gmap] || "";
+  var note = csvUnguardFormula(fields[colIndex.note] || "");
+  var gmap = csvUnguardFormula(fields[colIndex.gmap] || "");
 
   var item = {
     id: genId(),
@@ -411,7 +426,7 @@ function parseCsvItemRow(fields, colIndex) {
 function parseChecklistItemRow(fields, colIndex) {
   var kind = window.I18N.resolveListKind(fields[colIndex.list]);
   if (!kind) return null;
-  var text = (fields[colIndex.text] || "").trim();
+  var text = csvUnguardFormula((fields[colIndex.text] || "").trim());
   if (!text) return null;
   var doneVal = (fields[colIndex.done] || "").trim().toLowerCase();
   var done = doneVal === "1" || doneVal === "true";

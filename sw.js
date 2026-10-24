@@ -14,7 +14,7 @@
  *   アプリのファイルを更新したらこの値を上げること
  */
 
-var CACHE_VERSION = "v13";
+var CACHE_VERSION = "v14";
 var CACHE_NAME = "tabi-shiori-" + CACHE_VERSION;
 
 // オフラインで起動するために必要な、同一オリジンのファイル一式
@@ -57,7 +57,10 @@ self.addEventListener("install", function (event) {
       // 一部が取れなくてもインストールを成功させる（オフライン起動の確実性を優先）
       return Promise.all(
         PRECACHE_URLS.map(function (url) {
-          return cache.add(url).catch(function () {
+          // cache: "reload" でブラウザのHTTPキャッシュを経由せず必ずネットワークから取る。
+          // GitHub Pages は max-age=600 を付けるため、通常の add だとデプロイ直後に10分以内の古い版が
+          // 新しい CACHE_VERSION の下に保存され、次に版数を上げるまで古いまま残る恐れがある
+          return cache.add(new Request(url, { cache: "reload" })).catch(function () {
             /* この1件は諦める */
           });
         })
