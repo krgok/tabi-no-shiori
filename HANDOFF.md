@@ -20,7 +20,7 @@ GitHub Pages で公開している。
 ## 2. 最初にやること
 
 ```bash
-cd "C:\Users\hiro\Claude\Projects\旅のしおり"
+cd <このリポジトリのフォルダ>
 npm test        # 全23ファイル。1つでも落ちたら非0で終了する
 ```
 

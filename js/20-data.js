@@ -300,6 +300,12 @@ function normalizeChecklist(raw) {
   return list;
 }
 
+// 共有リンク・CSV・バックアップ・クラウドなど外から来たデータは、days/items の中身が
+// null や文字列でも例外にならないよう、オブジェクト以外の要素は捨てる
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
 function normalizeTrip(raw) {
   var out = {
     v: 1,
@@ -314,7 +320,7 @@ function normalizeTrip(raw) {
     packingPriv: !!raw.packingPriv,
     todosPriv: !!raw.todosPriv
   };
-  var days = Array.isArray(raw.days) ? raw.days : [];
+  var days = Array.isArray(raw.days) ? raw.days.filter(isPlainObject) : [];
   if (days.length === 0) {
     days = [{ date: "", startTime: "09:00", items: [] }];
   }
@@ -344,7 +350,7 @@ function normalizeTrip(raw) {
         typeof d.dateManual === "boolean" ? d.dateManual : !!(typeof d.date === "string" && d.date),
       items: []
     };
-    var items = Array.isArray(d.items) ? d.items : [];
+    var items = Array.isArray(d.items) ? d.items.filter(isPlainObject) : [];
     items.forEach(function (it) {
       var cat = window.I18N.CATEGORIES.indexOf(it.cat) !== -1 ? it.cat : "sight";
       var item = {
