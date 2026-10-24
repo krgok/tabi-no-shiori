@@ -46,11 +46,19 @@ function extractGmapCoords(rawUrl) {
       var lon2 = parseFloat(m[2]);
       if (isValidLatLon(lat2, lon2)) return { lat: lat2, lon: lon2 };
     }
-    m = /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),\d+(?:\.\d+)?z/.exec(u);
+    // @緯度,経度,17z（地図）・500m（航空写真）・3a（ストリートビュー）
+    m = /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),\d+(?:\.\d+)?[zma]/.exec(u);
     if (m) {
       var lat3 = parseFloat(m[1]);
       var lon3 = parseFloat(m[2]);
       if (isValidLatLon(lat3, lon3)) return { lat: lat3, lon: lon3 };
+    }
+    // ll=緯度,経度 と、/maps/search/緯度,+経度 /maps/place/緯度,経度（座標を検索した結果のURL）
+    m = /[?&]ll=(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/.exec(u) || /\/maps\/(?:search|place)\/(-?\d+(?:\.\d+)?),\+?\s*(-?\d+(?:\.\d+)?)(?:[/?#@]|$)/.exec(u);
+    if (m) {
+      var lat4 = parseFloat(m[1]);
+      var lon4 = parseFloat(m[2]);
+      if (isValidLatLon(lat4, lon4)) return { lat: lat4, lon: lon4 };
     }
   }
   return null;
@@ -83,14 +91,29 @@ function parseBareCoords(str) {
   if (!s) return null;
   if (isSafeHttpUrl(s)) return null;
 
-  var geoMatch = /^geo:(-?\d+(?:\.\d+)?)[\s,，、]+(-?\d+(?:\.\d+)?)/i.exec(s);
+  var geoMatch = /^geo:([+-]?\d+(?:\.\d+)?)[\s,，、]+([+-]?\d+(?:\.\d+)?)(.*)$/i.exec(s);
   if (geoMatch) {
     var glat = parseFloat(geoMatch[1]);
     var glon = parseFloat(geoMatch[2]);
+    // Androidの共有でよくある geo:0,0?q=緯度,経度(ラベル) は 0,0 が「位置なし」の目印で、
+    // 実際の位置は q= 側にある。q= が座標でない（場所名の検索）なら位置は確定できないので null
+    var geoQuery = /[?&]q=([^&]*)/i.exec(geoMatch[3]);
+    if (glat === 0 && glon === 0 && geoQuery) {
+      var qv = geoQuery[1];
+      try {
+        qv = decodeURIComponent(qv);
+      } catch (e) {
+        /* そのまま使う */
+      }
+      var qm = /^\s*([+-]?\d+(?:\.\d+)?)\s*,\s*([+-]?\d+(?:\.\d+)?)/.exec(qv);
+      if (!qm) return null;
+      glat = parseFloat(qm[1]);
+      glon = parseFloat(qm[2]);
+    }
     return isValidLatLon(glat, glon) ? { lat: glat, lon: glon } : null;
   }
 
-  var m = /^(-?\d+(?:\.\d+)?)[\s,，、]+(-?\d+(?:\.\d+)?)$/.exec(s);
+  var m = /^([+-]?\d+(?:\.\d+)?)[\s,，、]+([+-]?\d+(?:\.\d+)?)$/.exec(s);
   if (!m) return null;
   var lat = parseFloat(m[1]);
   var lon = parseFloat(m[2]);

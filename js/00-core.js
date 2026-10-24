@@ -13,7 +13,7 @@
  * ========================================================= */
 // ⚙️設定モーダルに表示する版数（サポート時に「更新が端末に届いたか」を確認する手掛かり）。
 // sw.js の CACHE_VERSION と常に同じ値にすること。一致は tests/test-pwa.js がCIで検知する
-var APP_VERSION = "v14";
+var APP_VERSION = "v15";
 var STORAGE_KEY_V1 = "tabi-shiori-v1";
 var STORAGE_KEY = "tabi-shiori-v2"; // v2: { currentId, trips: [{ id, data: <trip> }] }（複数しおりの管理 9）
 var GEO_CACHE_KEY = "tabi-geo-cache";
@@ -275,6 +275,12 @@ function normalizeFixedStart(v) {
 // Excelや手作業で編集したCSVは "2026/7/24" のようにスラッシュ区切り・月日が1桁になりやすい。
 // 日付として解釈できない値は「捨てずにそのまま返す」: 読み込み時にユーザーのデータを
 // 黙って消さないことを優先する（表示できないだけで、データは失われない）
+// 暦に実在する日付か（2/31・13月・0日などを弾く）。UTCで組み立てて往復が一致するかで判定する
+function isRealCalendarDate(y, mo, d) {
+  var dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
 function normalizeDateStr(v) {
   if (typeof v !== "string") return "";
   var s = v.trim();
@@ -284,7 +290,7 @@ function normalizeDateStr(v) {
   var y = parseInt(m[1], 10);
   var mo = parseInt(m[2], 10);
   var d = parseInt(m[3], 10);
-  if (isNaN(y) || isNaN(mo) || isNaN(d) || mo < 1 || mo > 12 || d < 1 || d > 31) return s;
+  if (!isRealCalendarDate(y, mo, d)) return s;
   return y + "-" + pad2(mo) + "-" + pad2(d);
 }
 
@@ -352,7 +358,7 @@ function sleep(ms) {
 // 形式が不正な文字列は "" を返す（呼び出し側で「連鎖停止」として扱われる）
 function addOneDayToDateStr(dateStr) {
   var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || ""));
-  if (!m) return "";
+  if (!m || !isRealCalendarDate(+m[1], +m[2], +m[3])) return "";
   var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
   d.setUTCDate(d.getUTCDate() + 1);
   return d.toISOString().slice(0, 10);

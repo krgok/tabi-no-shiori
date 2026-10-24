@@ -389,6 +389,7 @@ function bindEvents() {
       closeModal(document.getElementById(btn.dataset.close));
     });
   });
+  document.addEventListener("keydown", onModalKeydown);
   document.querySelectorAll(".modal-overlay").forEach(function (overlay) {
     overlay.addEventListener("click", function (e) {
       if (e.target === overlay) {

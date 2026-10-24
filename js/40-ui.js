@@ -473,13 +473,15 @@ function toggleDayMetaOpen() {
 /* =========================================================
  * 時差対応（13）
  * ========================================================= */
-// その日の基準日（時差オフセット計算・DST判定に使う）。day.date が無ければ今日を使う
+// その日の基準日（時差オフセット計算・DST判定に使う）。day.date が無ければ今日を使う。
+// 端末のタイムゾーンに依存しないよう、その日の UTC 正午で評価する（端末ローカルの0時だと、
+// DST切替日にだけ端末の所在地によって時差が±1時間ずれていた）
 function dayBaseDate(day) {
   if (day && typeof day.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day.date)) {
     var parts = day.date.split("-").map(function (n) {
       return parseInt(n, 10);
     });
-    return new Date(parts[0], parts[1] - 1, parts[2]);
+    return new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], 12));
   }
   return new Date();
 }
