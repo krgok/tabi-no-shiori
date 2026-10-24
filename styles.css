@@ -2979,3 +2979,20 @@ body.view-only-mode .item-nudge {
     transform: rotate(360deg);
   }
 }
+
+/* キーボード操作時のフォーカス表示。個別の部品が outline: none にしていても、
+   Tab で移動したときにどこにいるか分かるようにする（マウス・タップでは出ない :focus-visible） */
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+#langSelect:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--color-move);
+  outline-offset: 2px;
+}
+
+/* モーダルは開いたとき箱自体にフォーカスを移す（80-print.js）。箱には枠を出さない */
+.modal:focus,
+.modal:focus-visible {
+  outline: none;
+}
