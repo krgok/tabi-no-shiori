@@ -20,6 +20,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
+          # ランナーに同梱の Node は修正版より古いことがある（実際に 24.21.0 だった）ので、
+          # 公式配布の最新の 24.x を取得する。下の確認ステップが最終的な門番
+          check-latest: true
           cache: "npm"
 
       - name: Check Node.js version (CVE-2026-111497)
