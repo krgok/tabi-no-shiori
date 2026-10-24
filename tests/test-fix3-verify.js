@@ -449,7 +449,7 @@ async function waitUntil(cond, timeoutMs, stepMs) {
     langSel.dispatchEvent(new env.win.Event("change", { bubbles: true }));
 
     // 期待される翻訳件数: 全6件が名前翻訳対象（インポート直後でnames未取得）+ メモがある4件
-    // （サンプル出発駅-サンプル空港/成田空港/サンプル空港→サンプル国際空港/ドンムアン空港）がメモ翻訳対象 = 10件。
+    // （サンプル出発駅-サンプル空港/サンプル空港/サンプル空港→サンプル国際空港/サンプル国際空港）がメモ翻訳対象 = 10件。
     // saveState()はチェーン全体の完了後に1回だけ呼ばれるため、閾値ちょうどで判定を打ち切らず
     // 十分なバッファを取ってから localStorage を読む
     await waitUntil(() => callLog.filter((c) => c.type === "translate").length >= 10, 15000, 100);
@@ -461,20 +461,20 @@ async function waitUntil(cond, timeoutMs, stepMs) {
     const chofu = items.find((it) => it.name === "サンプル出発駅-サンプル空港");
     const taxiMove = items.find((it) => it.name === "タクシー移動");
     const t2dmk = items.find((it) => it.name === "サンプル空港→サンプル国際空港");
-    const narita = items.find((it) => it.name === "成田空港");
-    const donMueang = items.find((it) => it.name === "ドンムアン空港");
+    const narita = items.find((it) => it.name === "サンプル空港");
+    const donMueang = items.find((it) => it.name === "サンプル国際空港");
 
     ok(chofu && chofu.names.en === "[EN]サンプル出発駅-サンプル空港", "「サンプル出発駅-サンプル空港」のnames.enが翻訳される（move対象化）", chofu && chofu.names);
     ok(taxiMove && taxiMove.names.en === "[EN]タクシー移動", "「タクシー移動」のnames.enが翻訳される（move対象化）", taxiMove && taxiMove.names);
     ok(t2dmk && t2dmk.names.en === "[EN]サンプル空港→サンプル国際空港", "「サンプル空港→サンプル国際空港」のnames.enが翻訳される", t2dmk && t2dmk.names);
     ok(
       narita && narita.noteNames.en && narita.noteNames.en.indexOf("[EN]") === 0,
-      "「成田空港」のメモが翻訳される（noteNames.en）",
+      "「サンプル空港」のメモが翻訳される（noteNames.en）",
       narita && narita.noteNames
     );
     ok(
       donMueang && donMueang.noteNames.en && donMueang.noteNames.en.indexOf("[EN]") === 0,
-      "「ドンムアン空港」のメモが翻訳される（noteNames.en）",
+      "「サンプル国際空港」のメモが翻訳される（noteNames.en）",
       donMueang && donMueang.noteNames
     );
 

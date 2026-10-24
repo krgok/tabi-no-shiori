@@ -116,11 +116,11 @@ UI上は `#d=` と `#p=` を「共有」に統合済み（ログイン有無で�
 - **Sparkプラン（無料・課金なし）**
 - `firebaseConfig` は `js/00-core.js` にハードコード（公開前提の値なので問題ない）
 
-### Google Maps Platform（別プロジェクト `REDACTED-PROJECT`）
+### Google Maps Platform
 - APIキーはコードに無く、**⚙️設定からユーザーが入力してブラウザ内にのみ保存**される。
   共有リンク・CSV・バックアップには一切含まれない
-- キー `travel_itinerary` は Routes / Places (New) / Cloud Translation に制限済み、
-  リファラー制限は `localhost:8934/*` と `https://krgok.github.io/*`
+- キーは用途（Routes / Places / Translation）とリファラーで制限済み。プロジェクトIDや制限の詳細は
+  公開リポジトリには書かない（GCP コンソールで確認する）
 - **キーはURLごとに別保存。** localhost で設定しても公開URLには引き継がれない（サポート時の頻出質問）
 
 ---
